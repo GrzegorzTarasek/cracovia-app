@@ -9,13 +9,12 @@ from datetime import date
 from io import BytesIO
 import sqlite3
 import os
-import weakref # Wymagane przez SQLAlchemy (chociaż nieużywane bezpośrednio)
 
 
 # ===================== USTAWIENIA & DB =====================
 st.set_page_config(page_title="Cracovia – rejestry, wprowadzanie danych i analizy", layout="wide")
 
-DB_FILE = "cracovia.sqlite" # Nazwa pliku lokalnej bazy SQLite
+DB_FILE = "cracovia.sqlite"
 DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
 
 
@@ -47,6 +46,7 @@ def get_sqlite_engine():
                 if skip_lines:
                     continue
 
+                # Czyszczenie składni
                 line = line.replace("int(11)", "INTEGER")
                 line = line.replace("decimal(6,3)", "REAL")
                 line = line.replace("decimal(8,3)", "REAL")
@@ -61,6 +61,7 @@ def get_sqlite_engine():
                 line = line.replace("DEFAULT CHARSET=utf8mb4", "")
                 line = line.replace("AUTO_INCREMENT", "")
                 
+                # Usuń klauzule CHECK, FOREIGN KEY, INDEXY
                 line = line.replace("CHECK (`DuelLossOutBox` <= 0),", ",")
                 line = line.replace("CHECK (`RescueAction` >= 0),", ",")
                 line = line.replace("CONSTRAINT `chk_KeyLoss_le_zero` CHECK (`KeyLoss` <= 0),", "")
@@ -75,6 +76,7 @@ def get_sqlite_engine():
                 line = line.replace("UNIQUE KEY `uniq_label_dates` (`Label`,`DateStart`,`DateEnd`)", "UNIQUE (`Label`,`DateStart`,`DateEnd`)")
                 line = line.replace("UNIQUE KEY `Name` (`Name`),", "UNIQUE (`Name`),")
                 
+                # Zamień GENERATED ALWAYS AS na zwykłe kolumny INTEGER/REAL
                 line = line.replace("GENERATED ALWAYS AS", "AS")
                 line = line.replace("STORED", "")
                 line = line.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
@@ -103,19 +105,18 @@ def get_sqlite_engine():
 
 engine = get_sqlite_engine() 
 
+
 # ===================== DB HELPERS (Uproszczone) =====================
 
 def exec_sql(sql, params=None):
     with engine.begin() as con:
         return con.execute(text(sql), params or {})
 
-# Usunięto funkcję upsert, ponieważ jej użycie jest wyeliminowane w sekcjach edycji danych.
-
 def fetch_df(sql, params=None):
     return pd.read_sql(text(sql), con=engine, params=params or {})
 
 def ensure_db_views(engine):
-    """Tworzy widok 'all_stats' w SQLite."""
+    """Tworzy widok 'all_stats' w SQLite, który zastępuje skomplikowany JOIN z MySQL."""
     with engine.begin() as conn:
         sql_all_stats = """
         CREATE VIEW IF NOT EXISTS all_stats AS 
@@ -150,8 +151,9 @@ for c in ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL", "PlayerIntensityIndex"]:
 
 # Usunięto funkcję upsert_player
 
+
 # ==========================================
-# Funkcja Excel
+# Funkcja Excel (dostosowana do użycia load_fantasy/load_motoryka_all)
 # ==========================================
 
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame) -> BytesIO:
@@ -240,7 +242,7 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
         return output
 
 
-# ===================== NAGŁÓWEK + NAWIGACJA (Usunięto sekcję "Dodawanie danych") =====================
+# ===================== NAGŁÓWEK + NAWIGACJA (Tylko Dane i Analiza) =====================
 with st.sidebar:
     st.markdown("---")
     st.header(" Nawigacja")
@@ -275,7 +277,9 @@ def extract_positions(series: pd.Series) -> list:
                 all_pos.add(p)
     return sorted(all_pos)
 
-# ===================== Usunięto sekcje dodawania/edycji danych =====================
+# ===================== Usunięto całą sekcję do edycji danych (Zespoły, Okresy, Wpisy) =====================
+
+# ===================== PODGLĄD DANYCH =====================
 if page == "Podgląd danych":
     st.subheader("Podgląd ostatnich wpisów")
     opt = st.selectbox("Tabela", ["fantasypasy_stats", "motoryka_stats", "all_stats", "players", "teams", "measurement_periods"],
@@ -488,7 +492,7 @@ if page == "Porównania":
 # ===================== ANALIZA (pozycje & zespoły) =====================
 @st.cache_data(show_spinner=False)
 def load_fantasy(date_start=None, date_end=None, teams=None):
-    # Ręczne obliczanie PktOff i PktDef w load_fantasy
+    # Ręczne obliczanie PktOff i PktDef
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                NumberOfGames, Minutes,
@@ -505,10 +509,10 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
         params["ds"] = date_start
         params["de"] = date_end
     elif date_start:
-        sql += " AND DateEnd >= :ds"
+        sql += " AND DateEnd >= :ds"     # cokolwiek kończy się po ds
         params["ds"] = date_start
     elif date_end:
-        sql += " AND DateStart <= :de"
+        sql += " AND DateStart <= :de"   # cokolwiek zaczyna się przed de
         params["de"] = date_end
 
     if teams:
@@ -520,7 +524,7 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
     df = fetch_df(sql, params)
 
     if not df.empty:
-        # Dodaj obliczenia kolumn PktOff i PktDef
+        # Dodaj obliczenia kolumn PktOff i PktDef (zastępują GENERATED ALWAYS AS)
         df["PktOff"] = (pd.to_numeric(df["Goal"], errors='coerce') + pd.to_numeric(df["Assist"], errors='coerce') + 
                         pd.to_numeric(df["ChanceAssist"], errors='coerce') + pd.to_numeric(df["KeyPass"], errors='coerce') + 
                         pd.to_numeric(df["KeyLoss"], errors='coerce') + pd.to_numeric(df["Finalization"], errors='coerce') + 
@@ -663,20 +667,12 @@ if page == "Analiza (pozycje & zespoły)":
             download_button_for_df(agg_pos, " CSV (pozycja)", "fantasypasy_per_position.csv")
 
             st.markdown("Team")
-            agg_team = add_per90_from_sums(
-                flat_agg(df, ["Team"], num_cols), "Minutes",
-                ["Goal","Assist","ChanceAssist","KeyPass","KeyLoss","DuelLossInBox","MissBlockShot",
-                 "Finalization","KeyIndividualAction","KeyRecover","DuelWinInBox","BlockShot","PktOff","PktDef"]
-            )
+            agg_team = flat_agg(df, ["Team"], num_cols)
             st.dataframe(agg_team, use_container_width=True)
             download_button_for_df(agg_team, " CSV (team)", "fantasypasy_per_team.csv")
 
             st.markdown("Team × Pozycja")
-            agg_pos_team = add_per90_from_sums(
-                flat_agg(df_pos, ["Team","Position"], num_cols), "Minutes",
-                ["Goal","Assist","ChanceAssist","KeyPass","KeyLoss","DuelLossInBox","MissBlockShot",
-                 "Finalization","KeyIndividualAction","KeyRecover","DuelWinInBox","BlockShot","PktOff","PktDef"]
-            )
+            agg_pos_team = flat_agg(df_pos, ["Team","Position"], num_cols)
             st.dataframe(agg_pos_team, use_container_width=True)
             download_button_for_df(agg_pos_team, " CSV (team×pozycja)", "fantasypasy_position_team.csv")
 
