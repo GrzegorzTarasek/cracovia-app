@@ -1,0 +1,5 @@
+cd C:\Users\grzet\Desktop\cracovia_app
+python -m venv venv
+venv\Scripts\activate
+streamlit run app.py
+

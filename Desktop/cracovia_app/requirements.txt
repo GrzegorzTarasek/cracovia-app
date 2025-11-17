@@ -1,0 +1,8 @@
+streamlit
+SQLAlchemy>=2.0
+pymysql
+pandas
+python-dateutil
+reportlab
+openpyxl
+xlswriter
