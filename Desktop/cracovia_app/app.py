@@ -1,4 +1,4 @@
-# app.py
+# app.py (Wersja TYLKO DO ODCZYTU Z SQLite)
 
 import streamlit as st
 import pandas as pd
@@ -14,7 +14,7 @@ import os
 # ===================== USTAWIENIA & DB =====================
 st.set_page_config(page_title="Cracovia – rejestry, wprowadzanie danych i analizy", layout="wide")
 
-DB_FILE = "cracovia.sqlite"
+DB_FILE = "cracovia.sqlite" 
 DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
 
 
@@ -61,7 +61,6 @@ def get_sqlite_engine():
                 line = line.replace("DEFAULT CHARSET=utf8mb4", "")
                 line = line.replace("AUTO_INCREMENT", "")
                 
-                # Usuń klauzule CHECK, FOREIGN KEY, INDEXY
                 line = line.replace("CHECK (`DuelLossOutBox` <= 0),", ",")
                 line = line.replace("CHECK (`RescueAction` >= 0),", ",")
                 line = line.replace("CONSTRAINT `chk_KeyLoss_le_zero` CHECK (`KeyLoss` <= 0),", "")
@@ -76,7 +75,6 @@ def get_sqlite_engine():
                 line = line.replace("UNIQUE KEY `uniq_label_dates` (`Label`,`DateStart`,`DateEnd`)", "UNIQUE (`Label`,`DateStart`,`DateEnd`)")
                 line = line.replace("UNIQUE KEY `Name` (`Name`),", "UNIQUE (`Name`),")
                 
-                # Zamień GENERATED ALWAYS AS na zwykłe kolumny INTEGER/REAL
                 line = line.replace("GENERATED ALWAYS AS", "AS")
                 line = line.replace("STORED", "")
                 line = line.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
@@ -149,11 +147,9 @@ for c in ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL", "PlayerIntensityIndex"]:
     if c not in df.columns:
         df[c] = 0
 
-# Usunięto funkcję upsert_player
-
 
 # ==========================================
-# Funkcja Excel (dostosowana do użycia load_fantasy/load_motoryka_all)
+# Funkcja Excel
 # ==========================================
 
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame) -> BytesIO:
@@ -277,7 +273,7 @@ def extract_positions(series: pd.Series) -> list:
                 all_pos.add(p)
     return sorted(all_pos)
 
-# ===================== Usunięto całą sekcję do edycji danych (Zespoły, Okresy, Wpisy) =====================
+# ===================== Usunięto sekcje do edycji danych =====================
 
 # ===================== PODGLĄD DANYCH =====================
 if page == "Podgląd danych":
@@ -492,7 +488,7 @@ if page == "Porównania":
 # ===================== ANALIZA (pozycje & zespoły) =====================
 @st.cache_data(show_spinner=False)
 def load_fantasy(date_start=None, date_end=None, teams=None):
-    # Ręczne obliczanie PktOff i PktDef
+    # Ręczne obliczanie PktOff i PktDef w load_fantasy
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                NumberOfGames, Minutes,
@@ -609,7 +605,7 @@ def download_button_for_df(df, label, filename):
 if page == "Analiza (pozycje & zespoły)":
     st.subheader("Analiza statystyk – per pozycja i per team (obie tabele)")
 
-    teams_pick = st.multiselect("Zespoły (puste = wszystkie)", get_team_list(), default=[],
+    teams_pick = st.multiselect("Zespoły (puste = wszystkie)", DEFAULT_TEAMS, default=[],
                                 key="an_team_multi")
     src = st.radio("Tabela", ["FANTASYPASY", "MOTORYKA"], horizontal=True, key="an_src")
 
@@ -1331,6 +1327,7 @@ elif page == "Profil zawodnika":
                 .encode(
                     x=alt.X("DateMid:T", title="Data"),
                     y=alt.Y("Value:Q", title=metric_idx),
+                    color=alt.value("#FF0000"), # W tym widoku jest tylko jeden gracz, wiec kolor stały
                     tooltip=["DateMid:T", "Value:Q"]
                 )
                 .properties(height=360)
@@ -1435,7 +1432,7 @@ elif page == "Profil zawodnika":
                 merged_valid = merged.dropna(subset=["Team_PII_mean"])
 
                 if merged_valid.empty:
-                    st.info("Zawodnik ma wpisy, ale w tych dniach brak danych motorycznych zespołów (nie było meczów).")
+                    st.info("Zawodnik ma wpisy, ale w tych dniach brak danych motorycznych zespołów (nie było meczu).")
                 else:
                     best = (
                         merged_valid
