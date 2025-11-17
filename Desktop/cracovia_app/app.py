@@ -185,6 +185,23 @@ def upsert(sql, params):
 def fetch_df(sql, params=None):
     return pd.read_sql(text(sql), con=engine, params=params or {})
 
+def ensure_registry_tables():
+    sqls = [
+        #...
+    ]
+    for s in sqls:
+        exec_sql(s)
+    cnt = fetch_df("SELECT COUNT(*) AS n FROM teams").iloc[0]["n"]
+    if cnt == 0:
+        for t in DEFAULT_TEAMS:
+            exec_sql(
+                "INSERT INTO teams (Team) VALUES (:t) "
+                "ON DUPLICATE KEY UPDATE Team=VALUES(Team);",
+                {"t": t},
+            )
+
+ensure_registry_tables()
+
 def ensure_db_views(engine):
     """Tworzy widok 'all_stats' w SQLite, który zastępuje skomplikowany JOIN z MySQL."""
     with engine.begin() as conn:
