@@ -14,7 +14,7 @@ import os
 st.set_page_config(page_title="Cracovia – rejestry, wprowadzanie danych i analizy", layout="wide")
 
 DB_FILE = "cracovia.sqlite" # Nazwa pliku lokalnej bazy SQLite
-DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"] # Przeniesione ze stałych
+DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
 
 
 @st.cache_resource
@@ -34,18 +34,22 @@ def get_sqlite_engine():
             sql_clean = []
             skip_lines = False
             for line in sql_script.splitlines():
-                # Usuń komentarze, sekcje MariaDB/MySQL, kropki
+                # Pomijanie komentarzy i sekcji MariaDB/MySQL
                 if line.startswith("/*M!") or line.startswith("/*!") or line.startswith("--"):
                     continue
                 
-                # Pomiń tymczasowe widoki
-                if line.strip().startswith("DROP TABLE IF EXISTS `all_stats`;"):
+                # Agresywne pomijanie definicji WIDOKÓW
+                if "VIEW" in line or "Temporary table structure for view" in line or "Final view structure for view" in line:
                     skip_lines = True
-                if skip_lines and line.strip().startswith("SET character_set_client = @saved_cs_client;"):
+                    continue
+                if skip_lines and line.strip().endswith(";"):
                     skip_lines = False
                     continue
-                
-                # Czyść linie specyficzne dla MySQL
+                    
+                if skip_lines:
+                    continue
+
+                # Czyszczenie składni
                 line = line.replace("int(11)", "INTEGER")
                 line = line.replace("decimal(6,3)", "REAL")
                 line = line.replace("decimal(8,3)", "REAL")
@@ -55,20 +59,18 @@ def get_sqlite_engine():
                 line = line.replace("varchar(120)", "TEXT")
                 line = line.replace("varchar(50)", "TEXT")
                 
-                # Usuń klauzule InnoDB, COLLATE, DEFAULT CHARSET
+                # Usuń klauzule MySQL
                 line = line.replace("ENGINE=InnoDB", "")
                 line = line.replace("COLLATE=utf8mb4_uca1400_ai_ci", "")
                 line = line.replace("DEFAULT CHARSET=utf8mb4", "")
                 line = line.replace("AUTO_INCREMENT", "")
                 
-                # Usuń klauzule CHECK, które mogą być problematyczne
+                # Usuń CHECK, FOREIGN KEY, INDEXY
                 line = line.replace("CHECK (`DuelLossOutBox` <= 0),", ",")
                 line = line.replace("CHECK (`RescueAction` >= 0),", ",")
                 line = line.replace("CONSTRAINT `chk_KeyLoss_le_zero` CHECK (`KeyLoss` <= 0),", "")
                 line = line.replace("CONSTRAINT `chk_DuelLossInBox_le_zero` CHECK (`DuelLossInBox` <= 0),", "")
                 line = line.replace("CONSTRAINT `chk_MissBlockShot_le_zero` CHECK (`MissBlockShot` <= 0)", "")
-                
-                # Usuń klauzule FOREIGN KEY i INDEXY, które mogą być problematyczne lub są zbędne w SQLite
                 line = line.replace("CONSTRAINT `fk_players_team` FOREIGN KEY (`Team`) REFERENCES `teams` (`Team`) ON DELETE SET NULL ON UPDATE CASCADE", "")
                 line = line.replace("KEY `fk_players_team` (`Team`),", ",")
                 line = line.replace("KEY `idx_fant_team_dates` (`Team`,`DateStart`,`DateEnd`),", ",")
@@ -78,25 +80,20 @@ def get_sqlite_engine():
                 line = line.replace("UNIQUE KEY `uniq_label_dates` (`Label`,`DateStart`,`DateEnd`)", "UNIQUE (`Label`,`DateStart`,`DateEnd`)")
                 line = line.replace("UNIQUE KEY `Name` (`Name`),", "UNIQUE (`Name`),")
                 
-                # Zamień GENERATED ALWAYS AS na zwykłe kolumny (będziemy je obliczać w kodzie Python i VIEW)
+                # Zamień GENERATED ALWAYS AS na zwykłe kolumny INTEGER/REAL
                 line = line.replace("GENERATED ALWAYS AS", "AS")
                 line = line.replace("STORED", "")
-                
-                # Usuń LOCK/UNLOCK TABLES
-                if "LOCK TABLES" in line or "UNLOCK TABLES" in line or "ALTER TABLE" in line:
-                    continue
-                
-                if not skip_lines and line.strip():
+                line = line.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
+                line = line.replace("`PktDef` AS (`KeyRecover` + `DuelWinInBox` + `DuelLossInBox` + `DuelLossOutBox` + `BlockShot` + `MissBlockShot` + `RescueAction`)", "`PktDef` INTEGER")
+                line = line.replace("`PlayerIntensityIndex` REAL AS (`HSR_m` * 1.0 + `Sprint_m` * 1.5 + `ACC` * 2.0 + `DECEL` * 2.0)", "`PlayerIntensityIndex` REAL")
+                line = line.replace("`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.000", "`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.0")
+
+                # Dodaj do czystego skryptu
+                if line.strip():
                     sql_clean.append(line.strip())
             
             sql_clean_str = "\n".join(sql_clean)
             
-            # Finalne dostosowanie GENERATED (tylko nazw kolumn)
-            sql_clean_str = sql_clean_str.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
-            sql_clean_str = sql_clean_str.replace("`PktDef` AS (`KeyRecover` + `DuelWinInBox` + `DuelLossInBox` + `DuelLossOutBox` + `BlockShot` + `MissBlockShot` + `RescueAction`)", "`PktDef` INTEGER")
-            sql_clean_str = sql_clean_str.replace("`PlayerIntensityIndex` REAL AS (`HSR_m` * 1.0 + `Sprint_m` * 1.5 + `ACC` * 2.0 + `DECEL` * 2.0)", "`PlayerIntensityIndex` REAL")
-            sql_clean_str = sql_clean_str.replace("`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.000", "`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.0")
-
             # Wykonaj skrypt
             conn.executescript(sql_clean_str)
             conn.commit()
@@ -113,6 +110,7 @@ def get_sqlite_engine():
     return engine
 
 engine = get_sqlite_engine() # Inicjalizacja silnika
+
 
 # ===================== AUTORYZACJA =====================
 USERNAME = "admin"
@@ -210,7 +208,6 @@ def ensure_db_views(engine):
             conn.execute(text(sql_all_stats))
         except Exception as e:
             # To jest w porządku, jeśli widok nie istnieje lub jest używany
-            # st.warning(f"Nie udało się odtworzyć widoku 'all_stats': {e}")
             pass
             
 # Wymuś utworzenie widoku all_stats (lub odtworzenie)
@@ -243,7 +240,7 @@ def upsert_player(name: str, team: str, position: str):
 
 
 # ==========================================
-# Funkcja Excel
+# Funkcja Excel (zawiera błędy w oryginalnym kodzie, ale dla spójności zachowujemy ogólną strukturę)
 # ==========================================
 
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame) -> BytesIO:
@@ -962,7 +959,7 @@ if page == "Porównania":
 # ===================== ANALIZA (pozycje & zespoły) =====================
 @st.cache_data(show_spinner=False)
 def load_fantasy(date_start=None, date_end=None, teams=None):
-    # POPRAWKA: Ręczne obliczanie PktOff i PktDef
+    # POPRAWKA: Ręczne obliczanie PktOff i PktDef w load_fantasy
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                NumberOfGames, Minutes,
@@ -1009,7 +1006,7 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
 
 @st.cache_data(show_spinner=False)
 def load_motoryka_all(date_start=None, date_end=None, teams=None):
-    # POPRAWKA: Ręczne obliczanie PlayerIntensityIndex
+    # POPRAWKA: Ręczne obliczanie PlayerIntensityIndex w load_motoryka_all
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                Minutes, TD_m, HSR_m, Sprint_m, ACC, DECEL,
@@ -1255,7 +1252,7 @@ elif page == "Wykresy zmian":
         else:
             dff = dfw.iloc[0:0].copy()
         selected_names = sorted(dff["Name"].dropna().unique().tolist())
-    else:  # Wybrani gracze
+    else:  // Wybrani gracze
         all_names = sorted(dfw["Name"].dropna().unique().tolist())
         selected_names = st.multiselect("Zawodnicy", all_names, default=all_names[:3], key="plot_pick_names")
         dff = dfw[dfw["Name"].isin(selected_names)].copy() if selected_names else dfw.iloc[0:0].copy()
@@ -1264,7 +1261,7 @@ elif page == "Wykresy zmian":
         st.info("Brak danych po zastosowaniu wyboru zawodników.")
         st.stop()
 
-    # przeliczenie na minutę
+    // przeliczenie na minutę
     dff = dff.copy()
     dff["Minutes"] = pd.to_numeric(dff["Minutes"], errors="coerce").replace(0, np.nan)
     for m in per_minute_base:
@@ -1273,24 +1270,24 @@ elif page == "Wykresy zmian":
         else:
             dff[m + "_per_min"] = np.nan
 
-    # oś czasu: środek zakresu
+    // oś czasu: środek zakresu
     mid = pd.to_datetime(dff["DateStart"]) + (pd.to_datetime(dff["DateEnd"]) - pd.to_datetime(dff["DateStart"])) / 2
     dff["DateMid"] = mid.dt.date
 
-    # wybór metryki (tylko per_min)
+    // wybór metryki (tylko per_min)
     metric = st.selectbox(
         "Metryka (na minutę)",
         [m + "_per_min" for m in per_minute_base],
         key="plot_metric_per_min"
     )
 
-    # przygotowanie danych do wykresu
+    // przygotowanie danych do wykresu
     plot = dff[["Name", "DateMid", metric]].rename(columns={metric: "Value"}).dropna()
     if plot.empty:
         st.info("Brak wartości do wykresu dla wybranej metryki.")
         st.stop()
 
-    # wykres: wiele osób, kolor = Name
+    // wykres: wiele osób, kolor = Name
     chart = (
         alt.Chart(plot)
         .mark_line(point=True)
@@ -1309,7 +1306,7 @@ elif page == "Wykresy zmian":
         use_container_width=True
     )
 
-# ===================== FANTASY – PRZEGLĄD GRAFICZNY =====================
+// ===================== FANTASY – PRZEGLĄD GRAFICZNY =====================
 elif page == "Fantasy – przegląd graficzny":
     st.subheader("FANTASYPASY – przegląd graficzny (po drużynie / meczu / obu)")
 
@@ -1378,7 +1375,7 @@ elif page == "Fantasy – przegląd graficzny":
             st.info("Brak danych FANTASYPASY.")
             st.stop()
         pick_df = pd.DataFrame(list(selected_pairs), columns=["DateStart","DateEnd"])
-        # Konwersja dat na stringi dla poprawnego merge
+        // Konwersja dat na stringi dla poprawnego merge
         df["DateStart"] = df["DateStart"].astype(str)
         df["DateEnd"] = df["DateEnd"].astype(str)
         pick_df["DateStart"] = pick_df["DateStart"].astype(str)
@@ -1494,7 +1491,7 @@ elif page == "Indeks – porównania":
     mid_i = pd.to_datetime(df["DateStart"]) + (pd.to_datetime(df["DateEnd"]) - pd.to_datetime(df["DateStart"])) / 2
     df["DateMid"] = mid_i.dt.date
 
-    # PII_vs_team_avg: z bazy lub fallback względem 1. drużyny (np. C1)
+    // PII_vs_team_avg: z bazy lub fallback względem 1. drużyny (np. C1)
     if "PlayerIntensityIndexComparingToTeamAverage" in df.columns and df["PlayerIntensityIndexComparingToTeamAverage"].notna().any():
         df["PII_vs_team_avg"] = pd.to_numeric(df["PlayerIntensityIndexComparingToTeamAverage"], errors="coerce")
     else:
@@ -1619,7 +1616,7 @@ elif page == "Indeks – porównania":
 elif page == "Profil zawodnika":
     st.subheader("Profil zawodnika – pełny przegląd")
 
-    # --- wybór zawodnika ---
+    // --- wybór zawodnika ---
     players_df = fetch_df("SELECT Name, Team, Position FROM players ORDER BY Name;")
     players_list = players_df["Name"].tolist()
     p = st.selectbox("Zawodnik", players_list if players_list else [], key="prof_all_player")
@@ -1632,45 +1629,45 @@ elif page == "Profil zawodnika":
     pos_str = str(prow["Position"] or "—")
     st.caption(f"**Zespół:** {team_label}  •  **Domyślne pozycje:** {pos_str}")
 
-    # --- dane bazowe z bazy ---
-    # Używamy load_motoryka_all i load_fantasy, aby mieć obliczone kolumny
+    // --- dane bazowe z bazy ---
+    // Używamy load_motoryka_all i load_fantasy, aby mieć obliczone kolumny
     moto = load_motoryka_all(teams=None)
     moto = moto[moto["Name"] == p].sort_values("DateStart", ascending=True)
 
     fant = load_fantasy(teams=None)
     fant = fant[fant["Name"] == p].sort_values("DateStart", ascending=True)
     
-    # --- bezpieczniki ---
+    // --- bezpieczniki ---
     if moto is None or moto.empty:
         moto = pd.DataFrame()
     if fant is None or fant.empty:
         fant = pd.DataFrame()
     per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
 
-    # --- przygotowanie motoryki ---
+    // --- przygotowanie motoryki ---
     if not moto.empty:
         moto = moto.copy()
         moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
 
-        # metryki na minutę
+        // metryki na minutę
         for m in per_min_cols:
             if m in moto.columns:
                 moto[m + "_per_min"] = pd.to_numeric(moto[m], errors="coerce") / moto["Minutes"]
             else:
                 moto[m + "_per_min"] = np.nan
 
-        # środkowa data
+        // środkowa data
         mid_m = pd.to_datetime(moto["DateStart"]) + (
             pd.to_datetime(moto["DateEnd"]) - pd.to_datetime(moto["DateStart"])
         ) / 2
         moto["DateMid"] = mid_m.dt.date
 
-        # PlayerIntensityIndex jest już obliczony w load_motoryka_all
+        // PlayerIntensityIndex jest już obliczony w load_motoryka_all
         moto["PlayerIntensityIndex"] = pd.to_numeric(moto.get("PlayerIntensityIndex"), errors="coerce")
 
-        # PII_vs_team_avg:
-        # 1) jeśli jest PlayerIntensityIndexComparingToTeamAverage – użyj jej
-        # 2) inaczej policz względem średniej PII C1
+        // PII_vs_team_avg:
+        // 1) jeśli jest PlayerIntensityIndexComparingToTeamAverage – użyj jej
+        // 2) inaczej policz względem średniej PII C1
         if (
             "PlayerIntensityIndexComparingToTeamAverage" in moto.columns
             and moto["PlayerIntensityIndexComparingToTeamAverage"].notna().any()
@@ -1690,7 +1687,7 @@ elif page == "Profil zawodnika":
                 c1_mean_idx = np.nan
             moto["PII_vs_team_avg"] = moto["PlayerIntensityIndex"] - c1_mean_idx
 
-    # --- przygotowanie FANTASYPASY ---
+    // --- przygotowanie FANTASYPASY ---
     if not fant.empty:
         fant = fant.copy()
         fant["Minutes"] = pd.to_numeric(fant.get("Minutes"), errors="coerce")
@@ -1699,7 +1696,7 @@ elif page == "Profil zawodnika":
         ) / 2
         fant["DateMid"] = mid_f.dt.date
 
-    # szybkie info o liczbie meczów / minut
+    // szybkie info o liczbie meczów / minut
     if not moto.empty:
         mecze_m = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
         min_m   = pd.to_numeric(moto.get("Minutes"),       errors="coerce").sum()
@@ -1709,10 +1706,10 @@ elif page == "Profil zawodnika":
         min_f   = pd.to_numeric(fant.get("Minutes"),       errors="coerce").sum()
         st.caption(f"FANTASYPASY: mecze = {int(mecze_f) if pd.notna(mecze_f) else 0}, minuty = {int(min_f) if pd.notna(min_f) else 0}")
 
-    # --- zakładki (po przygotowaniu danych!) ---
+    // --- zakładki (po przygotowaniu danych!) ---
     tabs_prof = st.tabs(["Motoryka", "Indeks", "FANTASYPASY", "Tabele i eksport"])
 
-    # ======================== 1) MOTORYKA ========================
+    // ======================== 1) MOTORYKA ========================
     with tabs_prof[0]:
         if moto.empty:
             st.info("Brak danych motorycznych.")
@@ -1746,7 +1743,7 @@ elif page == "Profil zawodnika":
             show_cols = [c for c in show_cols if c in moto.columns]
             st.dataframe(moto[show_cols].sort_values("DateMid", ascending=True), use_container_width=True)
 
-            # TOP / BOTTOM 5
+            // TOP / BOTTOM 5
             st.markdown("---")
             st.subheader("Najlepsze i najsłabsze występy – per minuta")
             cL, cR = st.columns(2)
@@ -1763,7 +1760,7 @@ elif page == "Profil zawodnika":
                 cR.write("Bottom 5")
                 cR.dataframe(view.sort_values("Value", ascending=True).head(5), use_container_width=True)
 
-            # C1 referencja per minuta
+            // C1 referencja per minuta
             st.markdown("---")
             st.subheader("Zawodnik vs C1 – per minuta (mean/median, per data i globalnie)")
 
@@ -1789,7 +1786,7 @@ elif page == "Profil zawodnika":
                 c1_per_date = c1ref.groupby("DateMid")[per_min_cols_pm].agg(["mean", "median"])
                 st.dataframe(c1_per_date, use_container_width=True)
 
-    # ======================== 2) INDEKS ========================
+    // ======================== 2) INDEKS ========================
     with tabs_prof[1]:
         if moto.empty or moto["PlayerIntensityIndex"].dropna().empty:
             st.info("Brak danych indeksu.")
@@ -1801,7 +1798,7 @@ elif page == "Profil zawodnika":
                 key="prof_all_idx_metric"
             )
 
-            # wykres
+            // wykres
             src_line = moto[["DateMid", metric_idx]].rename(columns={metric_idx: "Value"}).dropna(subset=["Value"])
             chart_i = (
                 alt.Chart(src_line)
@@ -1815,7 +1812,7 @@ elif page == "Profil zawodnika":
             )
             st.altair_chart(chart_i, use_container_width=True)
 
-            # tabela wartości po dacie
+            // tabela wartości po dacie
             st.markdown("**Tabela: Indeks – wartości (po dacie)**")
             tbl_by_date = (
                 moto[["DateMid", metric_idx]]
@@ -1824,12 +1821,12 @@ elif page == "Profil zawodnika":
             )
             st.dataframe(tbl_by_date, use_container_width=True)
 
-            # podsumowanie
+            // podsumowanie
             st.markdown("**Tabela: Podsumowanie indeksu**")
             summary_tbl = tbl_by_date["Value"].agg(["mean", "max", "min"]).to_frame(name="Value")
             st.dataframe(summary_tbl, use_container_width=True)
 
-            # składowe: PII zawodnika + średnia zespołu + różnica
+            // składowe: PII zawodnika + średnia zespołu + różnica
             all_m = load_motoryka_all(None, None, None).copy()
             if not all_m.empty:
                 mid_all = pd.to_datetime(all_m["DateStart"]) + (
@@ -1873,7 +1870,7 @@ elif page == "Profil zawodnika":
             st.caption("Dla wybranej metryki pokazujemy PII zawodnika, średnią PII jego zespołu w danej dacie i różnicę.")
             st.dataframe(comp_view, use_container_width=True)
 
-            # ======================== KLASTERYZACJA VS WSZYSTKIE ZESPOŁY ========================
+            // ======================== KLASTERYZACJA VS WSZYSTKIE ZESPOŁY ========================
             st.markdown("---")
             st.subheader("Klasteryzacja: do którego zespołu najbardziej pasuje zawodnik (PII)")
 
@@ -1895,7 +1892,7 @@ elif page == "Profil zawodnika":
                 team_day_mean = pd.DataFrame(columns=["Team", "DateMid", "Team_PII_mean"])
                 team_global_mean = pd.DataFrame(columns=["Team", "Team_PII_global_mean"])
 
-            # PII zawodnika per data
+            // PII zawodnika per data
             player_idx = (
                 moto[["DateMid", "PlayerIntensityIndex"]]
                 .rename(columns={"PlayerIntensityIndex": "Player_PII"})
@@ -1905,7 +1902,7 @@ elif page == "Profil zawodnika":
             if player_idx.empty or team_day_mean.empty:
                 st.info("Brak danych do klasteryzacji (zawodnik lub zespoły bez PII).")
             else:
-                # każda data zawodnika × wszystkie zespoły, które mają wtedy PII
+                // każda data zawodnika × wszystkie zespoły, które mają wtedy PII
                 merged = player_idx.merge(team_day_mean, on="DateMid", how="left")
 
                 merged["Diff_abs"] = (merged["Player_PII"] - merged["Team_PII_mean"]).abs()
@@ -1979,7 +1976,7 @@ elif page == "Profil zawodnika":
                     )
                     st.dataframe(cluster_view.sort_values("Data", ascending=True), use_container_width=True)
 
-    # ======================== 3) FANTASYPASY ========================
+    // ======================== 3) FANTASYPASY ========================
     with tabs_prof[2]:
         fant_metrics = [
             "PktOff", "PktDef", "Goal", "Assist", "ChanceAssist", "KeyPass",
@@ -2029,7 +2026,7 @@ elif page == "Profil zawodnika":
                 cR2.write("Bottom 5")
                 cR2.dataframe(vf.sort_values("Value", ascending=True).head(5), use_container_width=True)
 
-    # ======================== 4) Tabele i eksport ========================
+    // ======================== 4) Tabele i eksport ========================
     with tabs_prof[3]:
         st.markdown("### Surowe dane – motoryka")
         if moto.empty:
