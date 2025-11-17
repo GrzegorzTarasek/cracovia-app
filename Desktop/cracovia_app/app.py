@@ -7,16 +7,112 @@ from sqlalchemy import create_engine, text
 import altair as alt
 from datetime import date
 from io import BytesIO
-
+import sqlite3
+import os
 
 
 
 # ===================== USTAWIENIA & DB =====================
 st.set_page_config(page_title="Cracovia – rejestry, wprowadzanie danych i analizy", layout="wide")
 
-cfg = st.secrets
-DB_URL = f"mysql+pymysql://{cfg.DB_USER}:{cfg.DB_PASS}@{cfg.DB_HOST}:{cfg.DB_PORT}/{cfg.DB_NAME}"
-engine = create_engine(DB_URL, pool_pre_ping=True)
+DB_FILE = "cracovia.sqlite" # Nazwa pliku lokalnej bazy SQLite
+
+@st.cache_resource
+def get_sqlite_engine():
+    """Tworzy silnik SQLite i ładuje dane z cracovia.sql (jeśli plik DB nie istnieje)."""
+    if not os.path.exists(DB_FILE):
+        st.info("Inicjalizacja lokalnej bazy danych SQLite z pliku cracovia.sql...")
+        try:
+            # Tworzymy puste połączenie
+            conn = sqlite3.connect(DB_FILE)
+            
+            # Wczytujemy zrzut SQL
+            with open("cracovia.sql", "r", encoding="utf-8") as f:
+                sql_script = f.read()
+
+            # --- Czyszczenie skryptu SQL dla kompatybilności z SQLite ---
+            sql_clean = []
+            skip_lines = False
+            for line in sql_script.splitlines():
+                # Usuń komentarze, sekcje MariaDB/MySQL, kropki
+                if line.startswith("/*M!") or line.startswith("/*!") or line.startswith("--"):
+                    continue
+                
+                # Pomiń tymczasowe widoki
+                if line.strip().startswith("DROP TABLE IF EXISTS `all_stats`;"):
+                    skip_lines = True
+                if skip_lines and line.strip().startswith("SET character_set_client = @saved_cs_client;"):
+                    skip_lines = False
+                    continue
+                
+                # Czyść linie specyficzne dla MySQL
+                line = line.replace("int(11)", "INTEGER")
+                line = line.replace("decimal(6,3)", "REAL")
+                line = line.replace("decimal(8,3)", "REAL")
+                line = line.replace("timestamp", "TEXT")
+                line = line.replace("date", "TEXT")
+                line = line.replace("varchar(100)", "TEXT")
+                line = line.replace("varchar(120)", "TEXT")
+                line = line.replace("varchar(50)", "TEXT")
+                
+                # Usuń klauzule InnoDB, COLLATE, DEFAULT CHARSET
+                line = line.replace("ENGINE=InnoDB", "")
+                line = line.replace("COLLATE=utf8mb4_uca1400_ai_ci", "")
+                line = line.replace("DEFAULT CHARSET=utf8mb4", "")
+                line = line.replace("AUTO_INCREMENT", "")
+                
+                # Usuń klauzule CHECK, które mogą być problematyczne
+                line = line.replace("CHECK (`DuelLossOutBox` <= 0),", ",")
+                line = line.replace("CHECK (`RescueAction` >= 0),", ",")
+                line = line.replace("CONSTRAINT `chk_KeyLoss_le_zero` CHECK (`KeyLoss` <= 0),", "")
+                line = line.replace("CONSTRAINT `chk_DuelLossInBox_le_zero` CHECK (`DuelLossInBox` <= 0),", "")
+                line = line.replace("CONSTRAINT `chk_MissBlockShot_le_zero` CHECK (`MissBlockShot` <= 0)", "")
+                
+                # Usuń klauzule FOREIGN KEY i INDEXY, które mogą być problematyczne lub są zbędne w SQLite
+                line = line.replace("CONSTRAINT `fk_players_team` FOREIGN KEY (`Team`) REFERENCES `teams` (`Team`) ON DELETE SET NULL ON UPDATE CASCADE", "")
+                line = line.replace("KEY `fk_players_team` (`Team`),", "")
+                line = line.replace("KEY `idx_fant_team_dates` (`Team`,`DateStart`,`DateEnd`),", ",")
+                line = line.replace("KEY `idx_fant_pos_dates` (`Position`,`DateStart`,`DateEnd`),", ",")
+                line = line.replace("KEY `idx_moto_team_dates` (`Team`,`DateStart`,`DateEnd`),", ",")
+                line = line.replace("KEY `idx_moto_pos_dates` (`Position`,`DateStart`,`DateEnd`)", "")
+                line = line.replace("UNIQUE KEY `uniq_label_dates` (`Label`,`DateStart`,`DateEnd`)", "UNIQUE (`Label`,`DateStart`,`DateEnd`)")
+                line = line.replace("UNIQUE KEY `Name` (`Name`),", "UNIQUE (`Name`),")
+                
+                # Zamień GENERATED ALWAYS AS na zwykłe kolumny (będziemy je obliczać w kodzie Python i VIEW)
+                line = line.replace("GENERATED ALWAYS AS", "AS")
+                line = line.replace("STORED", "")
+                
+                # Usuń LOCK/UNLOCK TABLES
+                if "LOCK TABLES" in line or "UNLOCK TABLES" in line or "ALTER TABLE" in line:
+                    continue
+                
+                if not skip_lines and line.strip():
+                    sql_clean.append(line.strip())
+            
+            sql_clean_str = "\n".join(sql_clean)
+            
+            # Finalne dostosowanie GENERATED (tylko nazw kolumn)
+            sql_clean_str = sql_clean_str.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
+            sql_clean_str = sql_clean_str.replace("`PktDef` AS (`KeyRecover` + `DuelWinInBox` + `DuelLossInBox` + `DuelLossOutBox` + `BlockShot` + `MissBlockShot` + `RescueAction`)", "`PktDef` INTEGER")
+            sql_clean_str = sql_clean_str.replace("`PlayerIntensityIndex` REAL AS (`HSR_m` * 1.0 + `Sprint_m` * 1.5 + `ACC` * 2.0 + `DECEL` * 2.0)", "`PlayerIntensityIndex` REAL")
+            sql_clean_str = sql_clean_str.replace("`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.000", "`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.0")
+
+            # Wykonaj skrypt
+            conn.executescript(sql_clean_str)
+            conn.commit()
+            conn.close()
+            st.success("Baza danych SQLite zainicjalizowana pomyślnie.")
+            
+        except Exception as e:
+            st.error(f"Błąd inicjalizacji bazy danych SQLite z cracovia.sql: {e}")
+            
+    # Teraz tworzymy silnik SQLAlchemy dla SQLite
+    DB_URL = f"sqlite:///{DB_FILE}"
+    engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
+    
+    return engine
+
+engine = get_sqlite_engine() # Inicjalizacja silnika
 
 # ===================== AUTORYZACJA =====================
 USERNAME = "admin"
