@@ -187,7 +187,31 @@ def fetch_df(sql, params=None):
 
 def ensure_registry_tables():
     sqls = [
-        #...
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            Team VARCHAR(100) PRIMARY KEY
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS players (
+            PlayerID INT AUTO_INCREMENT PRIMARY KEY,
+            Name VARCHAR(100) NOT NULL UNIQUE,
+            Team VARCHAR(100) NULL,
+            Position VARCHAR(50) NULL,
+            UpdatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT fk_players_team FOREIGN KEY (Team) REFERENCES teams(Team)
+              ON UPDATE CASCADE ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS measurement_periods (
+            PeriodID INT AUTO_INCREMENT PRIMARY KEY,
+            Label VARCHAR(120) NOT NULL,
+            DateStart DATE NOT NULL,
+            DateEnd   DATE NOT NULL,
+            UNIQUE KEY uniq_label_dates (Label, DateStart, DateEnd)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
     ]
     for s in sqls:
         exec_sql(s)
