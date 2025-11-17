@@ -9,6 +9,8 @@ from datetime import date
 from io import BytesIO
 import sqlite3
 import os
+import weakref # Wymagane przez SQLAlchemy (chociaż nieużywane bezpośrednio)
+
 
 # ===================== USTAWIENIA & DB =====================
 st.set_page_config(page_title="Cracovia – rejestry, wprowadzanie danych i analizy", layout="wide")
@@ -23,10 +25,7 @@ def get_sqlite_engine():
     if not os.path.exists(DB_FILE):
         st.info("Inicjalizacja lokalnej bazy danych SQLite z pliku cracovia.sql...")
         try:
-            # Tworzymy puste połączenie
             conn = sqlite3.connect(DB_FILE)
-            
-            # Wczytujemy zrzut SQL
             with open("cracovia.sql", "r", encoding="utf-8") as f:
                 sql_script = f.read()
 
@@ -34,7 +33,6 @@ def get_sqlite_engine():
             sql_clean = []
             skip_lines = False
             for line in sql_script.splitlines():
-                # Pomijanie komentarzy i sekcji MariaDB/MySQL
                 if line.startswith("/*M!") or line.startswith("/*!") or line.startswith("--"):
                     continue
                 
@@ -49,7 +47,6 @@ def get_sqlite_engine():
                 if skip_lines:
                     continue
 
-                # Czyszczenie składni
                 line = line.replace("int(11)", "INTEGER")
                 line = line.replace("decimal(6,3)", "REAL")
                 line = line.replace("decimal(8,3)", "REAL")
@@ -59,13 +56,11 @@ def get_sqlite_engine():
                 line = line.replace("varchar(120)", "TEXT")
                 line = line.replace("varchar(50)", "TEXT")
                 
-                # Usuń klauzule MySQL
                 line = line.replace("ENGINE=InnoDB", "")
                 line = line.replace("COLLATE=utf8mb4_uca1400_ai_ci", "")
                 line = line.replace("DEFAULT CHARSET=utf8mb4", "")
                 line = line.replace("AUTO_INCREMENT", "")
                 
-                # Usuń CHECK, FOREIGN KEY, INDEXY
                 line = line.replace("CHECK (`DuelLossOutBox` <= 0),", ",")
                 line = line.replace("CHECK (`RescueAction` >= 0),", ",")
                 line = line.replace("CONSTRAINT `chk_KeyLoss_le_zero` CHECK (`KeyLoss` <= 0),", "")
@@ -80,7 +75,6 @@ def get_sqlite_engine():
                 line = line.replace("UNIQUE KEY `uniq_label_dates` (`Label`,`DateStart`,`DateEnd`)", "UNIQUE (`Label`,`DateStart`,`DateEnd`)")
                 line = line.replace("UNIQUE KEY `Name` (`Name`),", "UNIQUE (`Name`),")
                 
-                # Zamień GENERATED ALWAYS AS na zwykłe kolumny INTEGER/REAL
                 line = line.replace("GENERATED ALWAYS AS", "AS")
                 line = line.replace("STORED", "")
                 line = line.replace("`PktOff` AS (`Goal` + `Assist` + `ChanceAssist` + `KeyPass` + `KeyLoss` + `Finalization` + `KeyIndividualAction`)", "`PktOff` INTEGER")
@@ -88,13 +82,11 @@ def get_sqlite_engine():
                 line = line.replace("`PlayerIntensityIndex` REAL AS (`HSR_m` * 1.0 + `Sprint_m` * 1.5 + `ACC` * 2.0 + `DECEL` * 2.0)", "`PlayerIntensityIndex` REAL")
                 line = line.replace("`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.000", "`PlayerIntensityIndexComparingToTeamAverage` REAL NOT NULL DEFAULT 0.0")
 
-                # Dodaj do czystego skryptu
                 if line.strip():
                     sql_clean.append(line.strip())
             
             sql_clean_str = "\n".join(sql_clean)
             
-            # Wykonaj skrypt
             conn.executescript(sql_clean_str)
             conn.commit()
             conn.close()
@@ -103,90 +95,27 @@ def get_sqlite_engine():
         except Exception as e:
             st.error(f"Błąd inicjalizacji bazy danych SQLite z cracovia.sql: {e}")
             
-    # Teraz tworzymy silnik SQLAlchemy dla SQLite
+    # Tworzenie silnika
     DB_URL = f"sqlite:///{DB_FILE}"
     engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
     
     return engine
 
-engine = get_sqlite_engine() # Inicjalizacja silnika
+engine = get_sqlite_engine() 
 
+# ===================== DB HELPERS (Uproszczone) =====================
 
-# ===================== AUTORYZACJA =====================
-USERNAME = "admin"
-PASSWORD = "Cracovia"
-
-def init_auth_state():
-    if "auth" not in st.session_state:
-        st.session_state["auth"] = False
-
-__SIDEBAR_RENDERED = False
-def sidebar_auth():
-    """Panel logowania w sidebarze (wywołaj raz na start)."""
-    global __SIDEBAR_RENDERED
-    if __SIDEBAR_RENDERED:
-        return
-    __SIDEBAR_RENDERED = True
-    with st.sidebar:
-        st.markdown("  Dostęp do edycji")
-        if st.session_state.get("auth", False):
-            st.success("Zalogowano jako **admin**")
-            if st.button(" Wyloguj", key="btn_logout_sidebar"):
-                st.session_state["auth"] = False
-                st.toast("Wylogowano.")
-        else:
-            with st.expander("Zaloguj się, aby dodawać/edytować"):
-                with st.form("login_form_sidebar_main", clear_on_submit=False):
-                    u = st.text_input("Login", value="", key="login_user_sidebar_main")
-                    p = st.text_input("Hasło", value="", type="password", key="login_pass_sidebar_main")
-                    ok = st.form_submit_button("Zaloguj", type="primary")
-                if ok:
-                    if u == USERNAME and p == PASSWORD:
-                        st.session_state["auth"] = True
-                        st.success("Zalogowano.")
-                        st.toast("Zalogowano.")
-                    else:
-                        st.error("Błędny login lub hasło.")
-
-def render_login_inline(suffix: str):
-    st.info("Ta sekcja wymaga zalogowania. Użyj panelu ** Dostęp do edycji** w lewym sidebarze.")
-    with st.expander(f"Albo zaloguj się tutaj ({suffix})"):
-        with st.form(f"login_form_inline_{suffix}", clear_on_submit=False):
-            u = st.text_input("Login", value="", key=f"login_user_inline_{suffix}")
-            p = st.text_input("Hasło", value="", type="password", key=f"login_pass_inline_{suffix}")
-            ok = st.form_submit_button("Zaloguj", type="primary")
-        if ok:
-            if u == USERNAME and p == PASSWORD:
-                st.session_state["auth"] = True
-                st.success("Zalogowano.")
-            else:
-                st.error("Błędny login lub hasło.")
-
-init_auth_state()
-sidebar_auth()
-
-# ===================== STAŁE =====================
-POS_OPTIONS = [
-    "ŚO", "LŚO", "PŚO", "LO",
-    "ŚPD", "8", "ŚP", "ŚPO", "10", "PW", "LW", "WAHADŁO", "NAPASTNIK",
-]
-
-# ===================== DB HELPERS =====================
 def exec_sql(sql, params=None):
     with engine.begin() as con:
         return con.execute(text(sql), params or {})
 
-def upsert(sql, params):
-    if not st.session_state.get("auth", False):
-        raise PermissionError("Brak uprawnień do zapisu – zaloguj się.")
-    with engine.begin() as con:
-        con.execute(text(sql), params)
+# Usunięto funkcję upsert, ponieważ jej użycie jest wyeliminowane w sekcjach edycji danych.
 
 def fetch_df(sql, params=None):
     return pd.read_sql(text(sql), con=engine, params=params or {})
 
 def ensure_db_views(engine):
-    """Tworzy widok 'all_stats' w SQLite, który zastępuje skomplikowany JOIN z MySQL."""
+    """Tworzy widok 'all_stats' w SQLite."""
     with engine.begin() as conn:
         sql_all_stats = """
         CREATE VIEW IF NOT EXISTS all_stats AS 
@@ -206,11 +135,9 @@ def ensure_db_views(engine):
         try:
             conn.execute(text("DROP VIEW IF EXISTS all_stats;"))
             conn.execute(text(sql_all_stats))
-        except Exception as e:
-            # To jest w porządku, jeśli widok nie istnieje lub jest używany
+        except Exception:
             pass
             
-# Wymuś utworzenie widoku all_stats (lub odtworzenie)
 ensure_db_views(engine) 
 
 sql = "SELECT * FROM all_stats WHERE Team='C1'"
@@ -221,26 +148,10 @@ for c in ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL", "PlayerIntensityIndex"]:
     if c not in df.columns:
         df[c] = 0
 
-# --- Funkcje rejestrów (Poprawione dla SQLite) ---
-
-def get_team_list():
-    try:
-        df = fetch_df("SELECT Team FROM teams ORDER BY Team;")
-        return df["Team"].tolist() if not df.empty else DEFAULT_TEAMS
-    except Exception:
-        return DEFAULT_TEAMS
-
-def upsert_player(name: str, team: str, position: str):
-    # POPRAWKA: Zmiana na składnię SQLite ON CONFLICT
-    upsert("""
-        INSERT INTO players (Name, Team, Position)
-        VALUES (:n, :t, :p)
-        ON CONFLICT(Name) DO UPDATE SET Team=excluded.Team, Position=excluded.Position
-    """, {"n": name.strip(), "t": team.strip() if team else None, "p": position.strip() if position else None})
-
+# Usunięto funkcję upsert_player
 
 # ==========================================
-# Funkcja Excel (zawiera błędy w oryginalnym kodzie, ale dla spójności zachowujemy ogólną strukturę)
+# Funkcja Excel
 # ==========================================
 
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame) -> BytesIO:
@@ -249,7 +160,6 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         workbook = writer.book
         
-        # Inicjalizacja zmiennych do obsługi kolumn w arkuszu Porównanie
         excel_comparison_worksheet = "Porównanie"
         c1_mean_idx = 1
         num_fant_rows = 0
@@ -258,41 +168,31 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
         # ===== 1) PORÓWNANIE – metryki PII i porównanie z C1 (sekcja górna) =====
         if moto is not None and not moto.empty:
             moto = moto.copy()
-            # Usuń godziny z dat
             moto["DateStart"] = pd.to_datetime(moto["DateStart"], errors="coerce").dt.date
             moto["DateEnd"] = pd.to_datetime(moto["DateEnd"], errors="coerce").dt.date
             moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
             
-            # Musimy załadować wszystkie dane motoryki, żeby policzyć średnią C1 dynamicznie
             try:
-                # Wczytanie wszystkich danych motoryki
                 df_all_moto = fetch_df("SELECT PlayerIntensityIndex, Team FROM motoryka_stats WHERE Team='C1'")
                 c1_mean_idx = pd.to_numeric(df_all_moto["PlayerIntensityIndex"], errors="coerce").mean()
             except Exception:
-                c1_mean_idx = 1 # Fallback, aby uniknąć ZeroDivisionError
+                c1_mean_idx = 1 
 
-            # Użyj kolumny PII, która powinna być obliczona przez load_motoryka_all lub widok
             moto["PlayerIntensityIndex"] = pd.to_numeric(moto["PlayerIntensityIndex"], errors="coerce")
-            
-            # Porównanie jako stosunek do średniej C1
             moto["PII_vs_team_avg"] = moto["PlayerIntensityIndex"] / c1_mean_idx 
             
-            # Zapisz dane porównania
             comparison_data = moto[["DateStart", "DateEnd", "Name", "Team", "PlayerIntensityIndex", "PII_vs_team_avg"]]
             comparison_data.to_excel(writer, sheet_name=excel_comparison_worksheet, index=False, startrow=1)
 
-            # Dodaj nagłówek
             worksheet = writer.sheets[excel_comparison_worksheet]
             worksheet.write(0, 0, "PORÓWNANIE – metryki PII i porównanie z C1")
 
         # ===== 2) FANTASYPASY – surowe dane =====
         if fant is not None and not fant.empty:
             fant = fant.copy()
-            # Usuń godziny z dat
             fant["DateStart"] = pd.to_datetime(fant["DateStart"], errors="coerce").dt.date
             fant["DateEnd"] = pd.to_datetime(fant["DateEnd"], errors="coerce").dt.date
 
-            # Zapisz surowe dane fantasy
             fant_full = fant[[
                 "DateStart", "DateEnd", "Goal", "Assist", "ChanceAssist", "KeyPass", "KeyLoss",
                 "DuelLossInBox", "DuelLossOutBox", "MissBlockShot", "Finalization", "KeyIndividualAction",
@@ -300,47 +200,37 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
             ]]
             fant_full.to_excel(writer, sheet_name="Fantasypasy", index=False, startrow=1)
 
-            # Dodaj nagłówek
             worksheet = writer.sheets["Fantasypasy"]
             worksheet.write(0, 0, "FANTASYPASY – surowe dane")
             
-            # Musimy znać długość tej tabeli, żeby kontynuować w Porównanie
-            num_fant_rows = len(fant_full) + 1 # + nagłówek 
+            num_fant_rows = len(fant_full) + 1 
 
         # ===== 3) PORÓWNANIE – metryki per minutę i porównanie z C1 (Dodatkowe) =====
         if moto is not None and not moto.empty and c1_mean_idx != 1 and 'Minutes' in moto.columns:
             
             per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
             
-            # Musimy obliczyć metryki per minuta
             for col in per_min_cols:
                 if col in moto.columns:
                     moto[col + "_per_min"] = pd.to_numeric(moto[col], errors="coerce") / moto["Minutes"]
-                    # Obliczanie średniej C1 dla danej metryki per minuta (dla porównania)
                     c1_mean_per_min = moto[col + "_per_min"].loc[moto["Team"] == "C1"].mean()
                     moto[col + "_vs_c1"] = moto[col + "_per_min"] / (c1_mean_per_min if c1_mean_per_min not in (0, np.nan) else 1) 
 
-            # Zapisz metryki per minutę i porównanie z C1
             all_per_min_cols = [c + "_per_min" for c in per_min_cols]
             all_vs_c1_cols = [c + "_vs_c1" for c in per_min_cols]
             
             additional_comparison = moto[["DateStart", "DateEnd", "Name", "Team"] + [c for c in all_per_min_cols + all_vs_c1_cols if c in moto.columns]]
             
-            # Określenie rzędu startowego
             if excel_comparison_worksheet in writer.sheets:
-                # Jeśli sekcja 1 była pusta, a to jest pierwsza sekcja do zapisu w Porównaniu, użyj wiersza 1
                 if comparison_data.empty:
                      start_row = 1
-                # Jeśli sekcja 1 była, kontynuuj po niej
                 else:
-                    start_row = len(comparison_data) + 3 # 1 wiersz danych + 2 nagłówki + 1 wolny wiersz = 4, ale + 3, bo startrow to index
+                    start_row = len(comparison_data) + 3 
             else:
-                 # Jeśli arkusz jeszcze nie istnieje (co nie powinno się zdarzyć, jeśli moto nie jest puste, ale na wszelki wypadek)
                  start_row = 1
             
             worksheet = writer.sheets[excel_comparison_worksheet]
             
-            # Dodaj nagłówek dla danych porównania
             worksheet.write(start_row - 1, 0, "PORÓWNANIE – metryki per minutę i porównanie z C1 (Dodatkowe)")
             
             additional_comparison.to_excel(writer, sheet_name=excel_comparison_worksheet, index=False, startrow=start_row)
@@ -350,22 +240,16 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
         return output
 
 
-# ===================== NAGŁÓWEK + NAWIGACJA (pozostawione z Twojego kodu) =====================
+# ===================== NAGŁÓWEK + NAWIGACJA (Usunięto sekcję "Dodawanie danych") =====================
 with st.sidebar:
     st.markdown("---")
     st.header(" Nawigacja")
     sekcja = st.radio(
         "Sekcja",
-        [" Dodawanie danych", " Dane", " Analiza"],
+        [" Dane", " Analiza"],
         key="nav_section",
     )
-    if sekcja == " Dodawanie danych":
-        page = st.radio(
-            "Strona",
-            ["Zawodnicy & Zespoły", "FANTASYPASY (wpis)", "MOTORYKA (wpis)", "Okresy/Testy"],
-            key="nav_page_add",
-        )
-    elif sekcja == " Dane":
+    if sekcja == " Dane":
         page = st.radio(
             "Strona",
             ["Podgląd danych"],
@@ -391,362 +275,8 @@ def extract_positions(series: pd.Series) -> list:
                 all_pos.add(p)
     return sorted(all_pos)
 
-# ===================== ZAWODNICY & ZESPOŁY =====================
-if page == "Zawodnicy & Zespoły":
-    st.subheader("Rejestr zespołów i zawodników")
-    if not st.session_state.get("auth", False):
-        render_login_inline("regs")
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("Zespoły")
-            team_to_add = st.text_input("Dodaj/zmień nazwę zespołu", key="reg_team_input")
-            if st.button(" Zapisz zespół", use_container_width=True, key="reg_team_save"):
-                if team_to_add.strip():
-                    # POPRAWKA: Zmiana na składnię SQLite ON CONFLICT
-                    upsert(
-                        "INSERT INTO teams (Team) VALUES (:t) "
-                        "ON CONFLICT(Team) DO UPDATE SET Team=excluded.Team;",
-                        {"t": team_to_add.strip()},
-                    )
-                    st.success("Zapisano zespół.")
-                else:
-                    st.warning("Podaj nazwę.")
-            st.dataframe(
-                fetch_df("SELECT Team FROM teams ORDER BY Team;"),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        with c2:
-            st.markdown("Zawodnik")
-            teams_list = get_team_list()
-            with st.form("player_form"):
-                p_name = st.text_input("Imię i nazwisko *", key="reg_player_name")
-                p_team = st.selectbox("Zespół", teams_list, index=0 if teams_list else 0, key="reg_team_select")
-                p_pos  = st.multiselect(
-                    "Domyślne pozycje (możesz wybrać kilka)",
-                    POS_OPTIONS,
-                    default=["ŚP"] if "ŚP" in POS_OPTIONS else [],
-                    key="reg_pos_multi"
-                )
-                ok = st.form_submit_button(" Zapisz / nadpisz zawodnika", type="primary")
-            if ok:
-                if p_name.strip():
-                    upsert_player(p_name, p_team, "/".join(p_pos) if p_pos else None)
-                    st.success("Zawodnik zapisany/zmieniony.")
-                else:
-                    st.error("Podaj imię i nazwisko.")
-            st.dataframe(
-                fetch_df("SELECT Name, Team, Position, UpdatedAt FROM players ORDER BY Name;"),
-                use_container_width=True,
-            )
-
-# ===================== OKRESY/TESTY =====================
-elif page == "Okresy/Testy":
-    st.subheader("Okresy / Testy (etykieta + zakres dat)")
-    if not st.session_state.get("auth", False):
-        render_login_inline("periods")
-    else:
-        with st.form("period_form"):
-            label = st.text_input("Etykieta okresu/testu *", value="Test szybkości", key="per_label")
-            ds = st.date_input("DateStart *", value=date.today(), key="per_ds")
-            de = st.date_input("DateEnd *", value=date.today(), key="per_de")
-            ok = st.form_submit_button(" Zapisz okres", type="primary")
-        if ok:
-            if label and ds and de:
-                # POPRAWKA: Zmiana na składnię SQLite ON CONFLICT
-                upsert("""
-                    INSERT INTO measurement_periods (Label, DateStart, DateEnd)
-                    VALUES (:l, :ds, :de)
-                    ON CONFLICT(Label, DateStart, DateEnd) DO UPDATE SET Label=excluded.Label
-                """, {"l": label.strip(), "ds": ds, "de": de})
-                st.success("Okres zapisany.")
-            else:
-                st.error("Uzupełnij pola z gwiazdką.")
-        st.dataframe(
-            fetch_df("SELECT PeriodID, Label, DateStart, DateEnd FROM measurement_periods ORDER BY DateStart DESC, Label;"),
-            use_container_width=True,
-        )
-
-# ===================== FANTASYPASY (WPIS) =====================
-elif page == "FANTASYPASY (wpis)":
-    st.subheader("Wpisz statystyki – FANTASYPASY")
-    if not st.session_state.get("auth", False):
-        render_login_inline("fant")
-    else:
-        players_df = fetch_df("SELECT Name, Team, Position FROM players ORDER BY Name;")
-        if players_df.empty:
-            st.info("Brak zawodników w rejestrze. Dodaj w „Zawodnicy & Zespoły”.")
-        else:
-            name = st.selectbox("Zawodnik *", players_df["Name"].tolist(), key="f_pick_player")
-            prow = players_df[players_df["Name"] == name].iloc[0]
-            team = (prow["Team"] or "")
-            default_pos_list = [p.strip() for p in str(prow["Position"] or "").replace("\\","/").split("/") if p.strip()]
-            st.caption(f"Zespół: **{team or '—'}** •  Domyślne pozycje: **{('/'.join(default_pos_list) or '—')}**")
-
-            # Zakres
-            mode_f = st.radio("Zakres dat do zapisu", ["Okres/Test z rejestru", "Z istniejących par dat (FANTASYPASY)", "Ręcznie"],
-                              horizontal=True, key="f_mode")
-            ds, de = None, None
-            if mode_f == "Okres/Test z rejestru":
-                periods = fetch_df("SELECT PeriodID, Label, DateStart, DateEnd FROM measurement_periods ORDER BY DateStart DESC;")
-                if periods.empty:
-                    st.info("Brak okresów – wybierz inną opcję.")
-                else:
-                    labels = [f"{r.Label} [{r.DateStart}→{r.DateEnd}]" for _, r in periods.iterrows()]
-                    pick = st.selectbox("Okres/Test", labels, index=0, key="f_pick_period")
-                    sel = periods.iloc[labels.index(pick)]
-                    ds, de = sel["DateStart"], sel["DateEnd"]
-                    st.caption(f"Zakres: {ds} → {de}")
-            elif mode_f == "Z istniejących par dat (FANTASYPASY)":
-                pairs = fetch_df("""SELECT DISTINCT DateStart, DateEnd FROM fantasypasy_stats
-                                    ORDER BY DateStart DESC, DateEnd DESC""")
-                if pairs.empty:
-                    st.info("Brak zapisanych par dat – wybierz inną opcję.")
-                else:
-                    opts = [f"{r.DateStart} → {r.DateEnd}" for _, r in pairs.iterrows()]
-                    pick = st.selectbox("Para dat", opts, index=0, key="f_pick_pair")
-                    sel = pairs.iloc[opts.index(pick)]
-                    ds, de = sel["DateStart"], sel["DateEnd"]
-                    st.caption(f"Zakres: {ds} → {de}")
-            else:
-                c3, c4 = st.columns(2)
-                ds = c3.date_input("DateStart *", key="f_ds")
-                de = c4.date_input("DateEnd *",   key="f_de")
-
-            # Pozycje tego wpisu
-            pos_multi = st.multiselect(
-                "Pozycje w tym wpisie",
-                POS_OPTIONS,
-                default=[p for p in default_pos_list if p in POS_OPTIONS] or ["ŚP" if "ŚP" in POS_OPTIONS else POS_OPTIONS[0]],
-                key="f_pos_multi"
-            )
-            upd_default_pos = st.checkbox("Zaktualizuj domyślne pozycje w rejestrze na wybrane powyżej",
-                                          value=False, key="f_update_default_pos")
-
-            # Metryki
-            st.markdown("Podstawy")
-            c1, c2 = st.columns(2)
-            number_of_games = c1.number_input("NumberOfGames", min_value=0, step=1, key="f_games")
-            minutes        = c2.number_input("Minutes",        min_value=0, step=1, key="f_minutes")
-
-            # --- OFENSYWA ---
-            st.markdown("Ofensywa")
-            c1, c2, c3, c4 = st.columns(4)
-            goal          = c1.number_input("Goal",         min_value=0, step=3, key="f_goal")
-            assist        = c2.number_input("Assist",       min_value=0, step=2, key="f_assist")
-            chance_assist = c3.number_input("ChanceAssist", min_value=0, step=2, key="f_chance")
-            key_pass      = c4.number_input("KeyPass",      min_value=0, step=2, key="f_keypass")
-
-            c1, c2, c3 = st.columns(3)
-            key_loss     = c1.number_input("KeyLoss (≤0)",         value=0, step=2, max_value=0, key="f_keyloss")
-            finalization = c2.number_input("Finalization",         min_value=0, step=1, key="f_final")
-            key_ind_act  = c3.number_input("KeyIndividualAction",  min_value=0, step=2, key="f_keyind")
-
-# --- STRATY / OBRONA ---
-            st.markdown("Straty / obrona")
-            c1, c2, c3, c4 = st.columns(4)
-            key_recover   = c1.number_input("KeyRecover",            min_value=0, step=2, key="f_keyrec")
-            duel_win_box  = c2.number_input("DuelWinInBox",          min_value=0, step=2, key="f_duelwin")
-            duel_loss_box = c3.number_input("DuelLossInBox (≤0)",    value=0, step=2, max_value=0, key="f_duelloss")
-            block_shot    = c4.number_input("BlockShot",             min_value=0, step=1, key="f_block")
-
-            c1, c2, c3 = st.columns(3)
-            miss_block     = c2.number_input("MissBlockShot (≤0)",     value=0, step=1, max_value=0, key="f_missblock")
-            duel_loss_out  = c1.number_input("DuelLossOutOfBox (≤0)", value=0, step=1, max_value=0, key="f_duellossout")
-            rescue_action  = c3.number_input("RescueAction",           min_value=0, step=2, key="f_rescue")
-
-
-
-            if st.button(" Zapisz do fantasypasy_stats", type="primary", key="f_save_btn"):
-                if not (name and team is not None and pos_multi and ds and de):
-                    st.error("Uzupełnij zawodnika, zakres dat i pozycje.")
-                else:
-                    pos_str = "/".join(pos_multi)
-                    if upd_default_pos:
-                        upsert_player(name, team, pos_str)  # nadpis domyślnych pozycji w rejestrze
-                        
-                    # POPRAWKA: Obliczanie i dodanie PktOff/PktDef do INSERT/UPDATE
-                    pkt_off = int(goal) + int(assist) + int(chance_assist) + int(key_pass) + int(key_loss) + int(finalization) + int(key_ind_act)
-                    pkt_def = int(key_recover) + int(duel_win_box) + int(duel_loss_box) + int(duel_loss_out) + int(block_shot) + int(miss_block) + int(rescue_action)
-
-
-                    # POPRAWKA: Zmiana składni na SQLite ON CONFLICT
-                    sql = """
-                    INSERT INTO fantasypasy_stats
-                      (Name, Team, Position, DateStart, DateEnd,
-                       NumberOfGames, Minutes, Goal, Assist, ChanceAssist, KeyPass,
-                       KeyLoss, DuelLossInBox, DuelLossOutBox, MissBlockShot,
-                       Finalization, KeyIndividualAction, KeyRecover, DuelWinInBox, BlockShot, RescueAction,
-                       PktOff, PktDef)
-                    VALUES
-                      (:Name, :Team, :Position, :DateStart, :DateEnd,
-                       :NumberOfGames, :Minutes, :Goal, :Assist, :ChanceAssist, :KeyPass,
-                       :KeyLoss, :DuelLossInBox, :DuelLossOutBox, :MissBlockShot,
-                       :Finalization, :KeyIndividualAction, :KeyRecover, :DuelWinInBox, :BlockShot, :RescueAction,
-                       :PktOff, :PktDef)
-                    ON CONFLICT(Name, DateStart, DateEnd) DO UPDATE SET
-                       Team=excluded.Team,
-                       Position=excluded.Position,
-                       NumberOfGames=excluded.NumberOfGames,
-                       Minutes=excluded.Minutes,
-                       Goal=excluded.Goal,
-                       Assist=excluded.Assist,
-                       ChanceAssist=excluded.ChanceAssist,
-                       KeyPass=excluded.KeyPass,
-                       KeyLoss=excluded.KeyLoss,
-                       DuelLossInBox=excluded.DuelLossInBox,
-                       DuelLossOutBox=excluded.DuelLossOutBox,
-                       MissBlockShot=excluded.MissBlockShot,
-                       Finalization=excluded.Finalization,
-                       KeyIndividualAction=excluded.KeyIndividualAction,
-                       KeyRecover=excluded.KeyRecover,
-                       DuelWinInBox=excluded.DuelWinInBox,
-                       BlockShot=excluded.BlockShot,
-                       RescueAction=excluded.RescueAction,
-                       PktOff=excluded.PktOff,
-                       PktDef=excluded.PktDef
-                    """
-
-                    params = {
-                        "Name": name, "Team": team, "Position": pos_str,
-                        "DateStart": ds, "DateEnd": de,
-                        "NumberOfGames": int(number_of_games), "Minutes": int(minutes),
-                        "Goal": int(goal), "Assist": int(assist), "ChanceAssist": int(chance_assist),
-                        "KeyPass": int(key_pass), "KeyLoss": int(key_loss),
-                        "DuelLossInBox": int(duel_loss_box), "DuelLossOutBox": int(duel_loss_out),
-                        "MissBlockShot": int(miss_block),
-                        "Finalization": int(finalization), "KeyIndividualAction": int(key_ind_act),
-                        "KeyRecover": int(key_recover), "DuelWinInBox": int(duel_win_box),
-                        "BlockShot": int(block_shot), "RescueAction": int(rescue_action),
-                        "PktOff": pkt_off, "PktDef": pkt_def
-                    }
-
-                    try:
-                        upsert(sql, params)
-                        st.success("Zapisano / zaktualizowano rekord (FANTASYPASY).")
-                    except PermissionError as e:
-                        st.error(str(e))
-                    except Exception as e:
-                        st.error(f"Błąd zapisu: {e}")            
-# ===================== MOTORYKA (WPIS) =====================
-elif page == "MOTORYKA (wpis)":
-    st.subheader("Wpisz statystyki – MOTORYKA")
-    if not st.session_state.get("auth", False):
-        render_login_inline("moto")
-    else:
-        players_df = fetch_df("SELECT Name, Team, Position FROM players ORDER BY Name;")
-        if players_df.empty:
-            st.info("Brak zawodników w rejestrze. Dodaj w „Zawodnicy & Zespoły”.")
-        else:
-            name2 = st.selectbox("Zawodnik *", players_df["Name"].tolist(), key="m_pick_player")
-            prow = players_df[players_df["Name"] == name2].iloc[0]
-            team2 = (prow["Team"] or "")
-            default_pos_list = [p.strip() for p in str(prow["Position"] or "").replace("\\","/").split("/") if p.strip()]
-            st.caption(f"Zespół: **{team2 or '—'}** •  Domyślne pozycje: **{('/'.join(default_pos_list) or '—')}**")
-
-            mode_m = st.radio("Zakres dat do zapisu", ["Okres/Test z rejestru", "Z istniejących par dat (MOTORYKA)", "Ręcznie"],
-                              horizontal=True, key="m_mode")
-            ds2, de2 = None, None
-            if mode_m == "Okres/Test z rejestru":
-                periods = fetch_df("SELECT PeriodID, Label, DateStart, DateEnd FROM measurement_periods ORDER BY DateStart DESC;")
-                if periods.empty:
-                    st.info("Brak okresów – wybierz inną opcję.")
-                else:
-                    labels = [f"{r.Label} [{r.DateStart}→{r.DateEnd}]" for _, r in periods.iterrows()]
-                    pick = st.selectbox("Okres/Test", labels, index=0, key="m_pick_period")
-                    sel = periods.iloc[labels.index(pick)]
-                    ds2, de2 = sel["DateStart"], sel["DateEnd"]
-                    st.caption(f"Zakres: {ds2} → {de2}")
-            elif mode_m == "Z istniejących par dat (MOTORYKA)":
-                pairs = fetch_df("""SELECT DISTINCT DateStart, DateEnd FROM motoryka_stats
-                                    ORDER BY DateStart DESC, DateEnd DESC""")
-                if pairs.empty:
-                    st.info("Brak zapisanych par dat – wybierz inną opcję.")
-                else:
-                    opts = [f"{r.DateStart} → {r.DateEnd}" for _, r in pairs.iterrows()]
-                    pick = st.selectbox("Para dat", opts, index=0, key="m_pick_pair")
-                    sel = pairs.iloc[opts.index(pick)]
-                    ds2, de2 = sel["DateStart"], sel["DateEnd"]
-                    st.caption(f"Zakres: {ds2} → {de2}")
-            else:
-                c3, c4 = st.columns(2)
-                ds2 = c3.date_input("DateStart *", key="m_ds")
-                de2 = c4.date_input("DateEnd *",   key="m_de")
-
-            pos2_multi = st.multiselect(
-                "Pozycje w tym wpisie",
-                POS_OPTIONS,
-                default=[p for p in default_pos_list if p in POS_OPTIONS] or ["ŚP" if "ŚP" in POS_OPTIONS else POS_OPTIONS[0]],
-                key="m_pos_multi"
-            )
-            upd_default_pos2 = st.checkbox("Zaktualizuj domyślne pozycje w rejestrze na wybrane powyżej",
-                                           value=False, key="m_update_default_pos")
-
-            minutes2 = st.number_input("Minutes (≥0)", min_value=0, step=1, key="m_minutes")
-            c1, c2, c3 = st.columns(3)
-            td_m      = c1.number_input("TD_m",     min_value=0, step=1, key="m_td")
-            hsr_m     = c2.number_input("HSR_m",    min_value=0, step=1, key="m_hsr")
-            sprint_m  = c3.number_input("Sprint_m", min_value=0, step=1, key="m_sprint")
-            c1, c2 = st.columns(2)
-            acc       = c1.number_input("ACC",   min_value=0, step=1, key="m_acc")
-            decel     = c2.number_input("DECEL", min_value=0, step=1, key="m_decel")
-
-            if st.button(" Zapisz do motoryka_stats", type="primary", key="m_save_btn"):
-                if not (name2 and team2 is not None and pos2_multi and ds2 and de2):
-                    st.error("Uzupełnij zawodnika, zakres dat i pozycje.")
-                else:
-                    pos_str2 = "/".join(pos2_multi)
-                    if upd_default_pos2:
-                        upsert_player(name2, team2, pos_str2)
-                        
-                    # POPRAWKA: Obliczenie i dodanie PlayerIntensityIndex do INSERT/UPDATE
-                    pii = int(hsr_m) * 1.0 + int(sprint_m) * 1.5 + int(acc) * 2.0 + int(decel) * 2.0
-
-
-                    # POPRAWKA: Zmiana składni na SQLite ON CONFLICT
-                    sql = """
-                    INSERT INTO motoryka_stats
-                      (Name, Team, Position, DateStart, DateEnd,
-                       Minutes, TD_m, HSR_m, Sprint_m, ACC, DECEL,
-                       PlayerIntensityIndex, PlayerIntensityIndexComparingToTeamAverage)
-                    VALUES
-                      (:Name, :Team, :Position, :DateStart, :DateEnd,
-                       :Minutes, :TD_m, :HSR_m, :Sprint_m, :ACC, :DECEL,
-                       :PII, 0)
-                    ON CONFLICT(Name, DateStart, DateEnd) DO UPDATE SET
-                       Team=excluded.Team,
-                       Position=excluded.Position,
-                       Minutes=excluded.Minutes,
-                       TD_m=excluded.TD_m,
-                       HSR_m=excluded.HSR_m,
-                       Sprint_m=excluded.Sprint_m,
-                       ACC=excluded.ACC,
-                       DECEL=excluded.DECEL,
-                       PlayerIntensityIndex=excluded.PlayerIntensityIndex
-                    """
-                    params = {
-                        "Name": name2, "Team": team2, "Position": pos_str2,
-                        "DateStart": ds2, "DateEnd": de2,
-                        "Minutes": int(minutes2),
-                        "TD_m": int(td_m),
-                        "HSR_m": int(hsr_m),
-                        "Sprint_m": int(sprint_m),
-                        "ACC": int(acc),
-                        "DECEL": int(decel),
-                        "PII": pii
-                    }
-                    try:
-                        upsert(sql, params)
-                        st.success("Zapisano / zaktualizowano rekord (MOTORYKA).")
-                    except PermissionError as e:
-                        st.error(str(e))
-                    except Exception as e:
-                        st.error(f"Błąd zapisu: {e}")
-
-# ===================== PODGLĄD DANYCH =====================
-elif page == "Podgląd danych":
+# ===================== Usunięto sekcje dodawania/edycji danych =====================
+if page == "Podgląd danych":
     st.subheader("Podgląd ostatnich wpisów")
     opt = st.selectbox("Tabela", ["fantasypasy_stats", "motoryka_stats", "all_stats", "players", "teams", "measurement_periods"],
                        key="preview_table_pick")
@@ -757,7 +287,6 @@ elif page == "Podgląd danych":
         st.error(f"Nie mogę wczytać: {e}")
 # ===================== PORÓWNANIA (Młodzież vs C1) =====================
 def load_motoryka_for_compare(date_start=None, date_end=None):
-    # Używamy all_stats, aby zapewnić, że PlayerIntensityIndex jest obliczony
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                Minutes, HSR_m, Sprint_m, ACC, DECEL, PlayerIntensityIndex
@@ -959,7 +488,7 @@ if page == "Porównania":
 # ===================== ANALIZA (pozycje & zespoły) =====================
 @st.cache_data(show_spinner=False)
 def load_fantasy(date_start=None, date_end=None, teams=None):
-    # POPRAWKA: Ręczne obliczanie PktOff i PktDef w load_fantasy
+    # Ręczne obliczanie PktOff i PktDef w load_fantasy
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                NumberOfGames, Minutes,
@@ -976,10 +505,10 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
         params["ds"] = date_start
         params["de"] = date_end
     elif date_start:
-        sql += " AND DateEnd >= :ds"     # cokolwiek kończy się po ds
+        sql += " AND DateEnd >= :ds"
         params["ds"] = date_start
     elif date_end:
-        sql += " AND DateStart <= :de"   # cokolwiek zaczyna się przed de
+        sql += " AND DateStart <= :de"
         params["de"] = date_end
 
     if teams:
@@ -991,7 +520,7 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
     df = fetch_df(sql, params)
 
     if not df.empty:
-        # Dodaj obliczenia kolumn PktOff i PktDef (zastępują GENERATED ALWAYS AS)
+        # Dodaj obliczenia kolumn PktOff i PktDef
         df["PktOff"] = (pd.to_numeric(df["Goal"], errors='coerce') + pd.to_numeric(df["Assist"], errors='coerce') + 
                         pd.to_numeric(df["ChanceAssist"], errors='coerce') + pd.to_numeric(df["KeyPass"], errors='coerce') + 
                         pd.to_numeric(df["KeyLoss"], errors='coerce') + pd.to_numeric(df["Finalization"], errors='coerce') + 
@@ -1006,7 +535,7 @@ def load_fantasy(date_start=None, date_end=None, teams=None):
 
 @st.cache_data(show_spinner=False)
 def load_motoryka_all(date_start=None, date_end=None, teams=None):
-    # POPRAWKA: Ręczne obliczanie PlayerIntensityIndex w load_motoryka_all
+    # Ręczne obliczanie PlayerIntensityIndex w load_motoryka_all
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
                Minutes, TD_m, HSR_m, Sprint_m, ACC, DECEL,
@@ -1035,7 +564,7 @@ def load_motoryka_all(date_start=None, date_end=None, teams=None):
     df = fetch_df(sql, params)
 
     if not df.empty:
-        # Dodaj obliczenie PlayerIntensityIndex (zastępuje GENERATED ALWAYS AS)
+        # Dodaj obliczenie PlayerIntensityIndex
         df["PlayerIntensityIndex"] = (pd.to_numeric(df["HSR_m"], errors='coerce') * 1.0 + 
                                       pd.to_numeric(df["Sprint_m"], errors='coerce') * 1.5 + 
                                       pd.to_numeric(df["ACC"], errors='coerce') * 2.0 + 
@@ -1252,7 +781,7 @@ elif page == "Wykresy zmian":
         else:
             dff = dfw.iloc[0:0].copy()
         selected_names = sorted(dff["Name"].dropna().unique().tolist())
-    else:  // Wybrani gracze
+    else:  # Wybrani gracze
         all_names = sorted(dfw["Name"].dropna().unique().tolist())
         selected_names = st.multiselect("Zawodnicy", all_names, default=all_names[:3], key="plot_pick_names")
         dff = dfw[dfw["Name"].isin(selected_names)].copy() if selected_names else dfw.iloc[0:0].copy()
@@ -1261,7 +790,7 @@ elif page == "Wykresy zmian":
         st.info("Brak danych po zastosowaniu wyboru zawodników.")
         st.stop()
 
-    // przeliczenie na minutę
+    # przeliczenie na minutę
     dff = dff.copy()
     dff["Minutes"] = pd.to_numeric(dff["Minutes"], errors="coerce").replace(0, np.nan)
     for m in per_minute_base:
@@ -1270,24 +799,24 @@ elif page == "Wykresy zmian":
         else:
             dff[m + "_per_min"] = np.nan
 
-    // oś czasu: środek zakresu
+    # oś czasu: środek zakresu
     mid = pd.to_datetime(dff["DateStart"]) + (pd.to_datetime(dff["DateEnd"]) - pd.to_datetime(dff["DateStart"])) / 2
     dff["DateMid"] = mid.dt.date
 
-    // wybór metryki (tylko per_min)
+    # wybór metryki (tylko per_min)
     metric = st.selectbox(
         "Metryka (na minutę)",
         [m + "_per_min" for m in per_minute_base],
         key="plot_metric_per_min"
     )
 
-    // przygotowanie danych do wykresu
+    # przygotowanie danych do wykresu
     plot = dff[["Name", "DateMid", metric]].rename(columns={metric: "Value"}).dropna()
     if plot.empty:
         st.info("Brak wartości do wykresu dla wybranej metryki.")
         st.stop()
 
-    // wykres: wiele osób, kolor = Name
+    # wykres: wiele osób, kolor = Name
     chart = (
         alt.Chart(plot)
         .mark_line(point=True)
@@ -1306,7 +835,7 @@ elif page == "Wykresy zmian":
         use_container_width=True
     )
 
-// ===================== FANTASY – PRZEGLĄD GRAFICZNY =====================
+# ===================== FANTASY – PRZEGLĄD GRAFICZNY =====================
 elif page == "Fantasy – przegląd graficzny":
     st.subheader("FANTASYPASY – przegląd graficzny (po drużynie / meczu / obu)")
 
@@ -1375,7 +904,7 @@ elif page == "Fantasy – przegląd graficzny":
             st.info("Brak danych FANTASYPASY.")
             st.stop()
         pick_df = pd.DataFrame(list(selected_pairs), columns=["DateStart","DateEnd"])
-        // Konwersja dat na stringi dla poprawnego merge
+        # Konwersja dat na stringi dla poprawnego merge
         df["DateStart"] = df["DateStart"].astype(str)
         df["DateEnd"] = df["DateEnd"].astype(str)
         pick_df["DateStart"] = pick_df["DateStart"].astype(str)
@@ -1491,7 +1020,7 @@ elif page == "Indeks – porównania":
     mid_i = pd.to_datetime(df["DateStart"]) + (pd.to_datetime(df["DateEnd"]) - pd.to_datetime(df["DateStart"])) / 2
     df["DateMid"] = mid_i.dt.date
 
-    // PII_vs_team_avg: z bazy lub fallback względem 1. drużyny (np. C1)
+    # PII_vs_team_avg: z bazy lub fallback względem 1. drużyny (np. C1)
     if "PlayerIntensityIndexComparingToTeamAverage" in df.columns and df["PlayerIntensityIndexComparingToTeamAverage"].notna().any():
         df["PII_vs_team_avg"] = pd.to_numeric(df["PlayerIntensityIndexComparingToTeamAverage"], errors="coerce")
     else:
@@ -1616,7 +1145,7 @@ elif page == "Indeks – porównania":
 elif page == "Profil zawodnika":
     st.subheader("Profil zawodnika – pełny przegląd")
 
-    // --- wybór zawodnika ---
+    # --- wybór zawodnika ---
     players_df = fetch_df("SELECT Name, Team, Position FROM players ORDER BY Name;")
     players_list = players_df["Name"].tolist()
     p = st.selectbox("Zawodnik", players_list if players_list else [], key="prof_all_player")
@@ -1629,45 +1158,45 @@ elif page == "Profil zawodnika":
     pos_str = str(prow["Position"] or "—")
     st.caption(f"**Zespół:** {team_label}  •  **Domyślne pozycje:** {pos_str}")
 
-    // --- dane bazowe z bazy ---
-    // Używamy load_motoryka_all i load_fantasy, aby mieć obliczone kolumny
+    # --- dane bazowe z bazy ---
+    # Używamy load_motoryka_all i load_fantasy, aby mieć obliczone kolumny
     moto = load_motoryka_all(teams=None)
     moto = moto[moto["Name"] == p].sort_values("DateStart", ascending=True)
 
     fant = load_fantasy(teams=None)
     fant = fant[fant["Name"] == p].sort_values("DateStart", ascending=True)
     
-    // --- bezpieczniki ---
+    # --- bezpieczniki ---
     if moto is None or moto.empty:
         moto = pd.DataFrame()
     if fant is None or fant.empty:
         fant = pd.DataFrame()
     per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
 
-    // --- przygotowanie motoryki ---
+    # --- przygotowanie motoryki ---
     if not moto.empty:
         moto = moto.copy()
         moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
 
-        // metryki na minutę
+        # metryki na minutę
         for m in per_min_cols:
             if m in moto.columns:
                 moto[m + "_per_min"] = pd.to_numeric(moto[m], errors="coerce") / moto["Minutes"]
             else:
                 moto[m + "_per_min"] = np.nan
 
-        // środkowa data
+        # środkowa data
         mid_m = pd.to_datetime(moto["DateStart"]) + (
             pd.to_datetime(moto["DateEnd"]) - pd.to_datetime(moto["DateStart"])
         ) / 2
         moto["DateMid"] = mid_m.dt.date
 
-        // PlayerIntensityIndex jest już obliczony w load_motoryka_all
+        # PlayerIntensityIndex jest już obliczony w load_motoryka_all
         moto["PlayerIntensityIndex"] = pd.to_numeric(moto.get("PlayerIntensityIndex"), errors="coerce")
 
-        // PII_vs_team_avg:
-        // 1) jeśli jest PlayerIntensityIndexComparingToTeamAverage – użyj jej
-        // 2) inaczej policz względem średniej PII C1
+        # PII_vs_team_avg:
+        # 1) jeśli jest PlayerIntensityIndexComparingToTeamAverage – użyj jej
+        # 2) inaczej policz względem średniej PII C1
         if (
             "PlayerIntensityIndexComparingToTeamAverage" in moto.columns
             and moto["PlayerIntensityIndexComparingToTeamAverage"].notna().any()
@@ -1687,7 +1216,7 @@ elif page == "Profil zawodnika":
                 c1_mean_idx = np.nan
             moto["PII_vs_team_avg"] = moto["PlayerIntensityIndex"] - c1_mean_idx
 
-    // --- przygotowanie FANTASYPASY ---
+    # --- przygotowanie FANTASYPASY ---
     if not fant.empty:
         fant = fant.copy()
         fant["Minutes"] = pd.to_numeric(fant.get("Minutes"), errors="coerce")
@@ -1696,7 +1225,7 @@ elif page == "Profil zawodnika":
         ) / 2
         fant["DateMid"] = mid_f.dt.date
 
-    // szybkie info o liczbie meczów / minut
+    # szybkie info o liczbie meczów / minut
     if not moto.empty:
         mecze_m = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
         min_m   = pd.to_numeric(moto.get("Minutes"),       errors="coerce").sum()
@@ -1706,10 +1235,10 @@ elif page == "Profil zawodnika":
         min_f   = pd.to_numeric(fant.get("Minutes"),       errors="coerce").sum()
         st.caption(f"FANTASYPASY: mecze = {int(mecze_f) if pd.notna(mecze_f) else 0}, minuty = {int(min_f) if pd.notna(min_f) else 0}")
 
-    // --- zakładki (po przygotowaniu danych!) ---
+    # --- zakładki (po przygotowaniu danych!) ---
     tabs_prof = st.tabs(["Motoryka", "Indeks", "FANTASYPASY", "Tabele i eksport"])
 
-    // ======================== 1) MOTORYKA ========================
+    # ======================== 1) MOTORYKA ========================
     with tabs_prof[0]:
         if moto.empty:
             st.info("Brak danych motorycznych.")
@@ -1743,7 +1272,7 @@ elif page == "Profil zawodnika":
             show_cols = [c for c in show_cols if c in moto.columns]
             st.dataframe(moto[show_cols].sort_values("DateMid", ascending=True), use_container_width=True)
 
-            // TOP / BOTTOM 5
+            # TOP / BOTTOM 5
             st.markdown("---")
             st.subheader("Najlepsze i najsłabsze występy – per minuta")
             cL, cR = st.columns(2)
@@ -1760,7 +1289,7 @@ elif page == "Profil zawodnika":
                 cR.write("Bottom 5")
                 cR.dataframe(view.sort_values("Value", ascending=True).head(5), use_container_width=True)
 
-            // C1 referencja per minuta
+            # C1 referencja per minuta
             st.markdown("---")
             st.subheader("Zawodnik vs C1 – per minuta (mean/median, per data i globalnie)")
 
@@ -1786,7 +1315,7 @@ elif page == "Profil zawodnika":
                 c1_per_date = c1ref.groupby("DateMid")[per_min_cols_pm].agg(["mean", "median"])
                 st.dataframe(c1_per_date, use_container_width=True)
 
-    // ======================== 2) INDEKS ========================
+    # ======================== 2) INDEKS ========================
     with tabs_prof[1]:
         if moto.empty or moto["PlayerIntensityIndex"].dropna().empty:
             st.info("Brak danych indeksu.")
@@ -1798,7 +1327,7 @@ elif page == "Profil zawodnika":
                 key="prof_all_idx_metric"
             )
 
-            // wykres
+            # wykres
             src_line = moto[["DateMid", metric_idx]].rename(columns={metric_idx: "Value"}).dropna(subset=["Value"])
             chart_i = (
                 alt.Chart(src_line)
@@ -1812,7 +1341,7 @@ elif page == "Profil zawodnika":
             )
             st.altair_chart(chart_i, use_container_width=True)
 
-            // tabela wartości po dacie
+            # tabela wartości po dacie
             st.markdown("**Tabela: Indeks – wartości (po dacie)**")
             tbl_by_date = (
                 moto[["DateMid", metric_idx]]
@@ -1821,12 +1350,12 @@ elif page == "Profil zawodnika":
             )
             st.dataframe(tbl_by_date, use_container_width=True)
 
-            // podsumowanie
+            # podsumowanie
             st.markdown("**Tabela: Podsumowanie indeksu**")
             summary_tbl = tbl_by_date["Value"].agg(["mean", "max", "min"]).to_frame(name="Value")
             st.dataframe(summary_tbl, use_container_width=True)
 
-            // składowe: PII zawodnika + średnia zespołu + różnica
+            # składowe: PII zawodnika + średnia zespołu + różnica
             all_m = load_motoryka_all(None, None, None).copy()
             if not all_m.empty:
                 mid_all = pd.to_datetime(all_m["DateStart"]) + (
@@ -1870,7 +1399,7 @@ elif page == "Profil zawodnika":
             st.caption("Dla wybranej metryki pokazujemy PII zawodnika, średnią PII jego zespołu w danej dacie i różnicę.")
             st.dataframe(comp_view, use_container_width=True)
 
-            // ======================== KLASTERYZACJA VS WSZYSTKIE ZESPOŁY ========================
+            # ======================== KLASTERYZACJA VS WSZYSTKIE ZESPOŁY ========================
             st.markdown("---")
             st.subheader("Klasteryzacja: do którego zespołu najbardziej pasuje zawodnik (PII)")
 
@@ -1892,7 +1421,7 @@ elif page == "Profil zawodnika":
                 team_day_mean = pd.DataFrame(columns=["Team", "DateMid", "Team_PII_mean"])
                 team_global_mean = pd.DataFrame(columns=["Team", "Team_PII_global_mean"])
 
-            // PII zawodnika per data
+            # PII zawodnika per data
             player_idx = (
                 moto[["DateMid", "PlayerIntensityIndex"]]
                 .rename(columns={"PlayerIntensityIndex": "Player_PII"})
@@ -1902,7 +1431,7 @@ elif page == "Profil zawodnika":
             if player_idx.empty or team_day_mean.empty:
                 st.info("Brak danych do klasteryzacji (zawodnik lub zespoły bez PII).")
             else:
-                // każda data zawodnika × wszystkie zespoły, które mają wtedy PII
+                # każda data zawodnika × wszystkie zespoły, które mają wtedy PII
                 merged = player_idx.merge(team_day_mean, on="DateMid", how="left")
 
                 merged["Diff_abs"] = (merged["Player_PII"] - merged["Team_PII_mean"]).abs()
@@ -1910,7 +1439,7 @@ elif page == "Profil zawodnika":
                 merged_valid = merged.dropna(subset=["Team_PII_mean"])
 
                 if merged_valid.empty:
-                    st.info("Zawodnik ma wpisy, ale w tych dniach brak danych motorycznych zespołów (nie było meczu).")
+                    st.info("Zawodnik ma wpisy, ale w tych dniach brak danych motorycznych zespołów (nie było meczów).")
                 else:
                     best = (
                         merged_valid
@@ -1976,7 +1505,7 @@ elif page == "Profil zawodnika":
                     )
                     st.dataframe(cluster_view.sort_values("Data", ascending=True), use_container_width=True)
 
-    // ======================== 3) FANTASYPASY ========================
+    # ======================== 3) FANTASYPASY ========================
     with tabs_prof[2]:
         fant_metrics = [
             "PktOff", "PktDef", "Goal", "Assist", "ChanceAssist", "KeyPass",
@@ -2026,7 +1555,7 @@ elif page == "Profil zawodnika":
                 cR2.write("Bottom 5")
                 cR2.dataframe(vf.sort_values("Value", ascending=True).head(5), use_container_width=True)
 
-    // ======================== 4) Tabele i eksport ========================
+    # ======================== 4) Tabele i eksport ========================
     with tabs_prof[3]:
         st.markdown("### Surowe dane – motoryka")
         if moto.empty:
