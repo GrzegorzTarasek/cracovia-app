@@ -224,25 +224,25 @@ def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:
     return pd.DataFrame()
 
     # ========= DIAGNOSTYKA DLA DANYCH FANTASY =========
-st.subheader("DIAGNOSTYKA FANTASYPASY (tylko test – usuń po sprawdzeniu)")
+    st.subheader("DIAGNOSTYKA FANTASYPASY (tylko test – usuń po sprawdzeniu)")
 
-fant_debug = load_fantasy_table().copy()
+    fant_debug = load_fantasy_table().copy()
 
-st.write("Kolumny w fantasypasy_stats.csv:")
-st.write(fant_debug.columns.tolist())
+    st.write("Kolumny w fantasypasy_stats.csv:")
+    st.write(fant_debug.columns.tolist())
 
-# Konwersja dat
-fant_debug["DateStart"] = pd.to_datetime(fant_debug["DateStart"], errors="coerce")
-fant_debug["DateEnd"] = pd.to_datetime(fant_debug["DateEnd"], errors="coerce")
+    # Konwersja dat
+    fant_debug["DateStart"] = pd.to_datetime(fant_debug["DateStart"], errors="coerce")
+    fant_debug["DateEnd"] = pd.to_datetime(fant_debug["DateEnd"], errors="coerce")
 
-st.write("Pierwsze 20 wierszy:")
-st.write(fant_debug.head(20))
+    st.write("Pierwsze 20 wierszy:")
+    st.write(fant_debug.head(20))
 
-st.write("Unikalne pary dat w FANTASY:")
-st.write(fant_debug[["DateStart", "DateEnd"]].drop_duplicates())
+    st.write("Unikalne pary dat w FANTASY:")
+    st.write(fant_debug[["DateStart", "DateEnd"]].drop_duplicates())
 
-st.write("Typy danych:")
-st.write(fant_debug.dtypes)
+    st.write("Typy danych:")
+    st.write(fant_debug.dtypes)
 
 # ===================== FUNKCJE LISTUJĄCE (korzystają już z CSV) =====================
 def get_team_list():
