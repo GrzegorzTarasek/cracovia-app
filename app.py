@@ -13,63 +13,52 @@ POS_OPTIONS = [
 ]
 DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
 
-# =====================================================
-#        WCZYTYWANIE DANYCH Z GITHUBA (CSV)
-# =====================================================
+# ===================== DANE Z GITHUBA (CSV) =====================
+import requests
 
-# PODMIEŃ SOBIE TEN BASE NA SWÓJ REPOZYTORIUM:
-# np. "https://raw.githubusercontent.com/twoj-user/twoj-repo/main/data"
-GITHUB_BASE = "https://raw.githubusercontent.com/twoj-user/twoj-repo/main/data"
+# Surowe pliki CSV z Twojego repozytorium
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/grzegorztarasek/cracovia-app/main"
 
-URL_FANTASY = f"{GITHUB_BASE}/fantasypasy_stats.csv"
-URL_MOTO = f"{GITHUB_BASE}/motoryka_stats.csv"
-URL_PERIODS = f"{GITHUB_BASE}/measurement_periods.csv"
-URL_PLAYERS = f"{GITHUB_BASE}/players.csv"
-URL_TEAMS = f"{GITHUB_BASE}/teams.csv"
+# Mapowanie nazw tabel na ścieżki plików w repo
+TABLE_PATHS = {
+    "motoryka_stats": "data/motoryka_stats.csv",
+    "fantasypasy_stats": "data/fantasypasy_stats.csv",
+    "players": "data/players.csv",
+    "teams": "data/teams.csv",
+    "measurement_periods": "data/measurement_periods.csv",
+}
 
 
 @st.cache_data(show_spinner=False)
 def load_all_tables():
+    """
+    Wczytuje wszystkie potrzebne tabele z GitHuba do słownika DataFrame'ów.
+    Klucze:
+      - motoryka_stats
+      - fantasypasy_stats
+      - players
+      - teams
+      - measurement_periods
+    """
     dfs = {}
 
-    try:
-        dfs["fantasy"] = pd.read_csv(URL_FANTASY)
-    except Exception:
-        dfs["fantasy"] = pd.DataFrame()
+    for key, rel_path in TABLE_PATHS.items():
+        url = f"{GITHUB_RAW_BASE}/{rel_path}"
+        try:
+            df = pd.read_csv(url)
+        except Exception as e:
+            st.warning(f"Nie udało się wczytać {key} z {url}: {e}")
+            df = pd.DataFrame()
+        dfs[key] = df
 
-    try:
-        dfs["moto"] = pd.read_csv(URL_MOTO)
-    except Exception:
-        dfs["moto"] = pd.DataFrame()
-
-    try:
-        dfs["periods"] = pd.read_csv(URL_PERIODS)
-    except Exception:
-        dfs["periods"] = pd.DataFrame()
-
-    try:
-        dfs["players"] = pd.read_csv(URL_PLAYERS)
-    except Exception:
-        dfs["players"] = pd.DataFrame()
-
-    try:
-        dfs["teams"] = pd.read_csv(URL_TEAMS)
-    except Exception:
-        dfs["teams"] = pd.DataFrame(columns=["Team"])
-
-    # konwersja dat
-    for key in ["fantasy", "moto", "periods"]:
-        if not dfs[key].empty:
-            if "DateStart" in dfs[key].columns:
-                dfs[key]["DateStart"] = pd.to_datetime(dfs[key]["DateStart"], errors="coerce")
-            if "DateEnd" in dfs[key].columns:
-                dfs[key]["DateEnd"] = pd.to_datetime(dfs[key]["DateEnd"], errors="coerce")
-
-    # czyszczenie nazw kolumn
+    # BEZPIECZNE czyszczenie nazw kolumn – bez .str
     for k in dfs:
-        dfs[k].columns = dfs[k].columns.str.strip()
+        df = dfs[k].copy()
+        df.columns = [str(c).strip() for c in df.columns]
+        dfs[k] = df
 
     return dfs
+
 
 
 TABLES = load_all_tables()
