@@ -26,13 +26,21 @@ def load_teams():
     df.columns = df.columns.str.strip()
     return df
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_periods():
-    df = _load("measurement_periods.csv")
-    df.columns = df.columns.str.strip()
-    df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-    df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-    return df
+    return _load("measurement_periods.csv")
+
+
+# ✅ DODAJ TO OD RAZU POD load_periods()
+@st.cache_data(show_spinner=False)
+def get_periods_df():
+    """
+    Wrapper dla starej nazwy funkcji.
+    Wszędzie w kodzie, gdzie wołaliśmy get_periods_df(),
+    teraz faktycznie korzystamy z CSV measurement_periods.csv.
+    """
+    return load_periods()
+
 
 @st.cache_data
 def load_motoryka():
