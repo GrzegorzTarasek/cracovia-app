@@ -648,6 +648,11 @@ def add_diffs(df, ref, by_position=True):
             df[m + "_pct"] = pd.to_numeric(df[m], errors="coerce") / (ref_mean if ref_mean not in (0, None, np.nan) else np.nan)
 
     return df
+fant = load_fantasy_table()
+fant["DateStart"] = pd.to_datetime(fant["DateStart"], errors="coerce")
+fant["DateEnd"] = pd.to_datetime(fant["DateEnd"], errors="coerce")
+
+st.write(fant[["DateStart","DateEnd"]].drop_duplicates())
 
 
 # ================= STRONA: PORÓWNANIA ====================
