@@ -262,19 +262,55 @@ def get_player_list():
 
 
 @st.cache_data(show_spinner=False)
-def get_periods_df():
-    try:
-        df = load_periods_table().copy()
-        if df.empty:
-            return pd.DataFrame(columns=["PeriodID", "Label", "DateStart", "DateEnd"])
-        df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-        df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-        cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
-        return df[cols].dropna(subset=["DateStart", "DateEnd"]).sort_values(
-            ["DateStart", "DateEnd"], ascending=[False, False]
-        )
-    except Exception:
-        return pd.DataFrame(columns=["PeriodID", "Label", "DateStart", "DateEnd"])
+def get_periods_df(table: str, teams: tuple | None = None) -> pd.DataFrame:
+    """
+    Zwraca okresy z measurement_periods TYLKO takie, dla których są dane
+    w wybranej tabeli (FANTASYPASY albo MOTORYKA).
+    Jeśli podasz teams != None, filtruje też po zespołach.
+    """
+    periods = get_periods_df().copy()
+    if periods.empty:
+        return periods
+
+    table = table.upper()
+
+    if table == "FANTASYPASY":
+        src = load_fantasy_table().copy()
+    else:   # "MOTORYKA"
+        src = load_motoryka_table().copy()
+
+    if src.empty:
+        # brak danych w tej tabeli
+        return periods.iloc[0:0].copy()
+
+    # ewentualny filtr po zespołach
+    if teams:
+        if "Team" in src.columns:
+            src = src[src["Team"].isin(teams)]
+        if src.empty:
+            return periods.iloc[0:0].copy()
+
+    # ujednolicamy typy dat na date (bez czasu)
+    periods["DateStart"] = pd.to_datetime(periods["DateStart"], errors="coerce").dt.date
+    periods["DateEnd"] = pd.to_datetime(periods["DateEnd"], errors="coerce").dt.date
+
+    src["DateStart"] = pd.to_datetime(src["DateStart"], errors="coerce").dt.date
+    src["DateEnd"] = pd.to_datetime(src["DateEnd"], errors="coerce").dt.date
+
+    pairs = (
+        src[["DateStart", "DateEnd"]]
+        .dropna()
+        .drop_duplicates()
+    )
+
+    if pairs.empty:
+        return periods.iloc[0:0].copy()
+
+    # zostawiamy tylko okresy, które występują w danych źródłowych
+    out = periods.merge(pairs, on=["DateStart", "DateEnd"], how="inner")
+
+    return out.sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+
 
 
 @st.cache_data(show_spinner=False)
@@ -848,45 +884,39 @@ elif page == "Analiza (pozycje & zespoły)":
         key="an_mode"
     )
 
-    ds_a, de_a = None, None
-    periods = get_periods_df()
+        ds_a, de_a = None, None
 
-    # --- TRYB: Okres/Test z rejestru (tylko okresy, gdzie są dane w wybranej tabeli) ---
+    # Ustalamy, jakie okresy mają REALNE dane dla wybranej tabeli i (opcjonalnie) zespołów
+    periods_all = get_periods_df()
+    periods = get_periods_with_data(
+        "FANTASYPASY" if src == "FANTASYPASY" else "MOTORYKA",
+        tuple(teams_pick) if teams_pick else None,
+    )
+
+    # ================== TRYB: Okres/Test z rejestru ==================
     if mode_a == "Okres/Test z rejestru":
         if periods.empty:
-            st.info("Brak zapisanych okresów – wybierz inną opcję.")
+            st.info("Brak okresów z danymi w wybranej tabeli (i zespołach).")
         else:
-            valid_rows = []
-            for _, r in periods.iterrows():
-                ds, de = r["DateStart"], r["DateEnd"]
-                if src == "FANTASYPASY":
-                    test_df = load_fantasy(ds, de, teams_pick or None)
-                else:
-                    test_df = load_motoryka_all(ds, de, teams_pick or None)
-                if test_df is not None and not test_df.empty:
-                    valid_rows.append(r)
+            labels = [
+                f"{r.Label} [{r.DateStart.date()}→{r.DateEnd.date()}]"
+                for _, r in periods.iterrows()
+            ]
+            pick = st.selectbox("Okres/Test", labels, index=0, key="an_pick_period")
+            sel = periods.iloc[labels.index(pick)]
+            ds_a, de_a = sel["DateStart"], sel["DateEnd"]
+            st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
 
-            if not valid_rows:
-                st.info("Brak okresów z danymi w wybranej tabeli (po uwzględnieniu filtrów zespołów). Zmień filtry albo wybierz inny tryb.")
-                st.stop()
-            else:
-                periods_use = pd.DataFrame(valid_rows)
-                labels = [
-                    f"{r.Label} [{r.DateStart.date()}→{r.DateEnd.date()}]"
-                    for _, r in periods_use.iterrows()
-                ]
-                pick = st.selectbox("Okres/Test", labels, index=0, key="an_pick_period")
-                sel = periods_use.iloc[labels.index(pick)]
-                ds_a, de_a = sel["DateStart"], sel["DateEnd"]
-                st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
-
-    # --- TRYB: Z istniejących par dat (tylko pary, gdzie są dane po filtrze zespołów) ---
+    # ================== TRYB: Z istniejących par dat ==================
     elif mode_a == "Z istniejących par dat":
         table = "motoryka_stats" if src == "MOTORYKA" else "fantasypasy_stats"
+
         pairs = fetch_df(
-            f"SELECT DISTINCT DateStart, DateEnd "
-            f"FROM {table} "
-            f"ORDER BY DateStart DESC, DateEnd DESC"
+            f"""
+            SELECT DISTINCT DateStart, DateEnd
+            FROM {table}
+            ORDER BY DateStart DESC, DateEnd DESC
+            """
         )
         if pairs.empty:
             st.info(f"Brak danych w {table} – wybierz „Ręcznie”.")
@@ -894,32 +924,21 @@ elif page == "Analiza (pozycje & zespoły)":
             pairs["DateStart"] = pd.to_datetime(pairs["DateStart"], errors="coerce")
             pairs["DateEnd"] = pd.to_datetime(pairs["DateEnd"], errors="coerce")
 
-            valid_rows = []
-            for _, r in pairs.iterrows():
-                ds, de = r["DateStart"], r["DateEnd"]
-                if src == "MOTORYKA":
-                    test_df = load_motoryka_all(ds, de, teams_pick or None)
-                else:
-                    test_df = load_fantasy(ds, de, teams_pick or None)
-                if test_df is not None and not test_df.empty:
-                    valid_rows.append(r)
+            opts = [
+                f"{r.DateStart.date()} → {r.DateEnd.date()}"
+                for _, r in pairs.iterrows()
+            ]
+            pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
+            sel = pairs.iloc[opts.index(pick)]
+            ds_a, de_a = sel["DateStart"], sel["DateEnd"]
+            st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
 
-            if not valid_rows:
-                st.info("Brak par dat z danymi dla wybranych zespołów w tej tabeli.")
-                st.stop()
-            else:
-                pairs_use = pd.DataFrame(valid_rows)
-                opts = [f"{r.DateStart.date()} → {r.DateEnd.date()}" for _, r in pairs_use.iterrows()]
-                pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
-                sel = pairs_use.iloc[opts.index(pick)]
-                ds_a, de_a = sel["DateStart"], sel["DateEnd"]
-                st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
-
-    # --- TRYB: ręczny ---
+    # ================== TRYB: Ręcznie ==================
     else:
         c1, c2 = st.columns(2)
         ds_a = c1.date_input("Od (DateStart)", value=None, key="an_ds")
         de_a = c2.date_input("Do (DateEnd)", value=None, key="an_de")
+
 
     # ===================== FANTASYPASY =====================
     if src == "FANTASYPASY":
