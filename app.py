@@ -223,6 +223,26 @@ def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:
     # fallback – jakby coś nowego się pojawiło
     return pd.DataFrame()
 
+    # ========= DIAGNOSTYKA DLA DANYCH FANTASY =========
+st.subheader("DIAGNOSTYKA FANTASYPASY (tylko test – usuń po sprawdzeniu)")
+
+fant_debug = load_fantasy_table().copy()
+
+st.write("Kolumny w fantasypasy_stats.csv:")
+st.write(fant_debug.columns.tolist())
+
+# Konwersja dat
+fant_debug["DateStart"] = pd.to_datetime(fant_debug["DateStart"], errors="coerce")
+fant_debug["DateEnd"] = pd.to_datetime(fant_debug["DateEnd"], errors="coerce")
+
+st.write("Pierwsze 20 wierszy:")
+st.write(fant_debug.head(20))
+
+st.write("Unikalne pary dat w FANTASY:")
+st.write(fant_debug[["DateStart", "DateEnd"]].drop_duplicates())
+
+st.write("Typy danych:")
+st.write(fant_debug.dtypes)
 
 # ===================== FUNKCJE LISTUJĄCE (korzystają już z CSV) =====================
 def get_team_list():
@@ -648,11 +668,7 @@ def add_diffs(df, ref, by_position=True):
             df[m + "_pct"] = pd.to_numeric(df[m], errors="coerce") / (ref_mean if ref_mean not in (0, None, np.nan) else np.nan)
 
     return df
-fant = load_fantasy_table()
-fant["DateStart"] = pd.to_datetime(fant["DateStart"], errors="coerce")
-fant["DateEnd"] = pd.to_datetime(fant["DateEnd"], errors="coerce")
 
-st.write(fant[["DateStart","DateEnd"]].drop_duplicates())
 
 
 # ================= STRONA: PORÓWNANIA ====================
