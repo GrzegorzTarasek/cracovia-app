@@ -1,0 +1,11 @@
+
+
+to w ostanim odnośnie gracza, klasteryzacja że gracz jest porównywany jeżeli chodzi o motorykę w indexie w taki sposób, że do kótrego teamu pasuje i jak się prezentuje względem niego w ogólnej średniej i do średniej w danym dniu, jak nie ma danego zespołu, to napisane, ze niebyło meczu
+
+
+
+
+zając się tym pieprzonym excelem, 3 zakładki, fanstasy (z analizą), motoryka (z analizą), porówanie - tutaj te rzeczy związane z już dokładnym porównaniem
+
+
+usunąć rzeczy na które i tak bez sensu patrzeć, bo kod psują tylko
