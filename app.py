@@ -212,6 +212,79 @@ def get_periods_df():
         return pd.DataFrame(columns=["PeriodID", "Label", "DateStart", "DateEnd"])
 
 
+@st.cache_data(show_spinner=False)
+def load_fantasy(date_start=None, date_end=None, teams=None):
+    sql = """
+        SELECT Name, Team, Position, DateStart, DateEnd,
+                NumberOfGames, Minutes,
+                Goal, Assist, ChanceAssist, KeyPass,
+                KeyLoss, DuelLossInBox, MissBlockShot,
+                Finalization, KeyIndividualAction, KeyRecover, DuelWinInBox, BlockShot,
+                PktOff, PktDef
+        FROM fantasypasy_stats
+        WHERE 1=1
+    """
+    params = {}
+    if date_start and date_end:
+        sql += " AND NOT (DateEnd < :ds OR DateStart > :de)"
+        params["ds"] = date_start
+        params["de"] = date_end
+    elif date_start:
+        sql += " AND DateEnd >= :ds"
+        params["ds"] = date_start
+    elif date_end:
+        sql += " AND DateStart <= :de"
+        params["de"] = date_end
+
+    if teams:
+        sql += " AND Team IN :teams"
+        params["teams"] = tuple(teams)
+
+    sql += " ORDER BY DateStart DESC"
+    return fetch_df(sql, params)
+
+@st.cache_data(show_spinner=False)
+def load_motoryka_all(date_start=None, date_end=None, teams=None):
+    sql = """
+        SELECT Name, Team, Position, DateStart, DateEnd,
+                Minutes, TD_m, HSR_m, Sprint_m, ACC, DECEL, PlayerIntensityIndex
+        FROM motoryka_stats
+        WHERE 1=1
+    """
+    params = {}
+    if date_start and date_end:
+        sql += " AND NOT (DateEnd < :ds OR DateStart > :de)"
+        params["ds"] = date_start
+        params["de"] = date_end
+    elif date_start:
+        sql += " AND DateEnd >= :ds"
+        params["ds"] = date_start
+    elif date_end:
+        sql += " AND DateStart <= :de"
+        params["de"] = date_end
+
+    if teams:
+        sql += " AND Team IN :teams"
+        params["teams"] = tuple(teams)
+
+    sql += " ORDER BY DateStart DESC"
+    return fetch_df(sql, params)
+
+def load_motoryka_for_compare(date_start=None, date_end=None):
+    sql = """
+        SELECT Name, Team, Position, DateStart, DateEnd,
+               Minutes, HSR_m, Sprint_m, ACC, DECEL, PlayerIntensityIndex
+        FROM motoryka_stats
+        WHERE 1=1
+    """
+    params = {}
+    if date_start:
+        sql += " AND DateStart >= :ds"; params["ds"] = date_start
+    if date_end:
+        sql += " AND DateEnd <= :de"; params["de"] = date_end
+    sql += " ORDER BY DateStart DESC"
+    return fetch_df(sql, params)
+
 
 
 # ===================== EMULACJA fetch_df(...) NA CSV =====================
