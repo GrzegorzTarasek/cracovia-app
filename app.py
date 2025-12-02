@@ -7,118 +7,117 @@ from io import BytesIO
 # ===================== STAŁE =====================
 POS_OPTIONS = [
     "ŚO", "LŚO", "PŚO", "LO",
-    "ŚPD", "8", "ŚP", "ŚPO", "10", "PW", "LW", "WAHADŁO", "NAPASTNIK",
+    "ŚPD", "8", "ŚP", "ŚPO", "10",
+    "PW", "LW", "WAHADŁO", "NAPASTNIK",
 ]
+
 DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
 
-# ===================== DANE Z GITHUBA (CSV) =====================
-BASE_CSV_URL = "https://raw.githubusercontent.com/GrzegorzTarasek/cracovia-app/main/dane/"
+BASE_CSV_URL = "https://raw.githubusercontent.com/GrzegorzTarasek/cracovia-app/main/dane"
 
-TABLES: dict[str, pd.DataFrame] = {}
+# Oczekiwane pliki:
+#   - motoryka_stats.csv
+#   - fantasypasy.csv
+#   - players.csv
+#   - teams.csv
+#   - measurement_periods.csv   (albo periods.csv – patrz niżej)
 
 
-def _load_csv(fname: str) -> pd.DataFrame:
-    url = BASE_CSV_URL + fname
+# ===================== CACHE CSV =====================
+
+@st.cache_data(show_spinner=False)
+def csv_table(name: str) -> pd.DataFrame:
+    """
+    Ogólny loader dla CSV z katalogu /dane.
+    """
+    import io
+    import requests
+
+    url = f"{BASE_CSV_URL}/{name}.csv"
     try:
-        df = pd.read_csv(url)
+        r = requests.get(url)
+        if r.status_code != 200:
+            return pd.DataFrame()
+        data = r.content.decode("utf-8")
+        df = pd.read_csv(io.StringIO(data))
+        return df
     except Exception:
         return pd.DataFrame()
-    return df
 
 
 @st.cache_data(show_spinner=False)
 def load_motoryka_table() -> pd.DataFrame:
-    if "motoryka_stats" in TABLES:
-        return TABLES["motoryka_stats"]
-    df = _load_csv("motoryka_stats.csv")
-    TABLES["motoryka_stats"] = df
-    return df
+    return csv_table("motoryka_stats")
 
 
 @st.cache_data(show_spinner=False)
 def load_fantasy_table() -> pd.DataFrame:
-    if "fantasypasy_stats" in TABLES:
-        return TABLES["fantasypasy_stats"]
-    df = _load_csv("fantasypasy.csv")
-    TABLES["fantasypasy_stats"] = df
-    return df
+    return csv_table("fantasypasy")
 
 
 @st.cache_data(show_spinner=False)
 def load_players_table() -> pd.DataFrame:
-    if "players" in TABLES:
-        return TABLES["players"]
-    df = _load_csv("players_table.csv")
-    TABLES["players"] = df
-    return df
+    return csv_table("players")
 
 
 @st.cache_data(show_spinner=False)
 def load_teams_table() -> pd.DataFrame:
-    if "teams" in TABLES:
-        return TABLES["teams"]
-    df = _load_csv("teams.csv")
-    TABLES["teams"] = df
-    return df
+    return csv_table("teams")
 
 
 @st.cache_data(show_spinner=False)
 def load_periods_table() -> pd.DataFrame:
-    if "measurement_periods" in TABLES:
-        return TABLES["measurement_periods"]
-    df = _load_csv("measurement_periods.csv")
-    TABLES["measurement_periods"] = df
-    return df
+    """
+    measurement_periods.csv lub periods.csv – użyj pierwszego, który istnieje.
+    """
+    df = csv_table("measurement_periods")
+    if df is not None and not df.empty:
+        return df
+    # fallback, gdybyś chciał mieć nazwę periods.csv
+    df2 = csv_table("periods")
+    return df2 if df2 is not None else pd.DataFrame()
 
 
-# ===================== EMULACJA fetch_df NA CSV =====================
+# ===================== EMULACJA DAWNEJ fetch_df(...) =====================
+
 def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:
     """
-    Zastępuje wcześniejsze zapytania SQL na bazie – na podstawie tekstu SELECT
-    zwraca odpowiedni DataFrame z CSV.
+    Zastępstwo dla dawnych zapytań SQL.
+    Na podstawie fragmentów tekstu zapytania zwraca odpowiedni DataFrame
+    z danych wczytanych z CSV.
+    Obsługiwane są m.in.:
+    - measurement_periods (okresy),
+    - DISTINCT DateStart/DateEnd z motoryka_stats / fantasypasy_stats,
+    - players (Name, Team, Position),
+    - motoryka_stats / fantasypasy_stats z filtrami po Name, zakresie dat i zespole.
     """
-    if params is None:
-        params = {}
+    if sql is None:
+        return pd.DataFrame()
 
-    s = sql.lower().strip()
+    params = params or {}
+    s = " ".join(sql.lower().split())
 
-    # ---- LISTA ZESPOŁÓW ----
-    # SELECT Team FROM teams ORDER BY Team;
-    if "from teams" in s and "select" in s and "team" in s:
-        df = load_teams_table().copy()
-        if "Team" not in df.columns:
-            return pd.DataFrame(columns=["Team"])
-        return df[["Team"]].dropna().drop_duplicates().sort_values("Team")
+    date_start = params.get("ds")
+    date_end = params.get("de")
+    teams = params.get("teams")
 
-    # ---- LISTA ZAWODNIKÓW ----
-    # SELECT Name FROM players ORDER BY Name;
-    if "from players" in s and "select" in s and "name" in s and "team" not in s:
-        df = load_players_table().copy()
-        if "Name" not in df.columns:
-            return pd.DataFrame(columns=["Name"])
-        return df[["Name"]].dropna().drop_duplicates().sort_values("Name")
-
-    # ---- LISTA ZAWODNIKÓW Z TEAM & POSITION ----
-    # SELECT Name, Team, Position FROM players ORDER BY Name;
-    if "from players" in s and "select" in s and "team" in s:
-        df = load_players_table().copy()
-        cols = [c for c in ["Name", "Team", "Position"] if c in df.columns]
-        if not cols:
-            return pd.DataFrame()
-        return df[cols].dropna(subset=["Name"]).sort_values("Name")
-
-    # ---- OKRESY POMIAROWE ----
+    # measurement_periods
     if "from measurement_periods" in s:
         df = load_periods_table().copy()
-        cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
-        if not cols:
+        if df.empty:
             return pd.DataFrame()
-        df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-        df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
+        if "DateStart" in df.columns:
+            df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
+        if "DateEnd" in df.columns:
+            df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
+        cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
         df = df[cols].dropna(subset=["DateStart", "DateEnd"]).drop_duplicates()
-        return df.sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+        return df.sort_values(
+            ["DateStart", "DateEnd"],
+            ascending=[False, False],
+        )
 
-    # ---- PARY DAT Z MOTORYKA / FANTASYPASY ----
+    # DISTINCT DateStart, DateEnd ...
     if "distinct datestart" in s and "dateend" in s:
         if "from motoryka_stats" in s:
             df = load_motoryka_table().copy()
@@ -126,53 +125,92 @@ def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:
             df = load_fantasy_table().copy()
         else:
             return pd.DataFrame()
+
         if "DateStart" not in df.columns or "DateEnd" not in df.columns:
             return pd.DataFrame()
+
         df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
         df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-        df = df[["DateStart", "DateEnd"]].dropna().drop_duplicates()
-        return df.sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+        df = (
+            df[["DateStart", "DateEnd"]]
+            .dropna()
+            .drop_duplicates()
+            .sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+        )
+        return df
 
-    # ---- PODSTAWOWE ZAPYTANIA DO MOTORYKI ----
+    # motoryka_stats – zapytania ogólne oraz "WHERE Name = :name"
     if "from motoryka_stats" in s:
         df = load_motoryka_table().copy()
+        if df.empty:
+            return pd.DataFrame()
 
+        # WHERE Name = :name
         if "where name" in s and "name" in params and "Name" in df.columns:
             df = df[df["Name"] == params["name"]]
 
-        if ":ds" in s and "ds" in params and "DateStart" in df.columns:
+        # zakres dat
+        if date_start is not None and "DateStart" in df.columns:
             df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-            df = df[df["DateStart"] >= pd.to_datetime(params["ds"])]
-        if ":de" in s and "de" in params and "DateEnd" in df.columns:
+            df = df[df["DateStart"] >= pd.to_datetime(date_start)]
+        if date_end is not None and "DateEnd" in df.columns:
             df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-            df = df[df["DateEnd"] <= pd.to_datetime(params["de"])]
+            df = df[df["DateEnd"] <= pd.to_datetime(date_end)]
 
-        # filtrowanie po zespołach
-        if "team in" in s and "teams" in params and "Team" in df.columns:
-            df = df[df["Team"].isin(params["teams"])]
+        # filtr po zespole (Team IN :teams)
+        if teams is not None and "Team" in df.columns:
+            if isinstance(teams, (list, tuple, set)):
+                df = df[df["Team"].isin(list(teams))]
+            else:
+                df = df[df["Team"] == teams]
 
         return df
 
-    # ---- PODSTAWOWE ZAPYTANIA DO FANTASYPASY ----
+    # fantasypasy_stats – zapytania ogólne oraz "WHERE Name = :name"
     if "from fantasypasy_stats" in s:
         df = load_fantasy_table().copy()
+        if df.empty:
+            return pd.DataFrame()
 
-        if ":ds" in s and "ds" in params and "DateStart" in df.columns:
+        # WHERE Name = :name
+        if "where name" in s and "name" in params and "Name" in df.columns:
+            df = df[df["Name"] == params["name"]]
+
+        # zakres dat
+        if date_start is not None and "DateStart" in df.columns:
             df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-            df = df[df["DateStart"] >= pd.to_datetime(params["ds"])]
-        if ":de" in s and "de" in params and "DateEnd" in df.columns:
+            df = df[df["DateStart"] >= pd.to_datetime(date_start)]
+        if date_end is not None and "DateEnd" in df.columns:
             df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-            df = df[df["DateEnd"] <= pd.to_datetime(params["de"])]
+            df = df[df["DateEnd"] <= pd.to_datetime(date_end)]
 
-        if "team in" in s and "teams" in params and "Team" in df.columns:
-            df = df[df["Team"].isin(params["teams"])]
+        # filtr po zespole (Team IN :teams)
+        if teams is not None and "Team" in df.columns:
+            if isinstance(teams, (list, tuple, set)):
+                df = df[df["Team"].isin(list(teams))]
+            else:
+                df = df[df["Team"] == teams]
 
         return df
 
+    # players
+    if "from players" in s:
+        df = load_players_table().copy()
+        if "Name" in df.columns and "Team" in df.columns and "Position" in df.columns:
+            df = df[["Name", "Team", "Position"]]
+        return df.sort_values("Name") if "Name" in df.columns else df
+
+    # teams
+    if "from teams" in s:
+        df = load_teams_table().copy()
+        return df
+
+    # fallback – nic nie pasuje
     return pd.DataFrame()
 
 
-# ===================== FUNKCJE LISTUJĄCE =====================
+# ===================== FUNKCJE LISTUJĄCE (korzystają już z CSV) =====================
+
 def get_team_list():
     try:
         df = load_teams_table()
@@ -265,7 +303,6 @@ def load_motoryka_all(date_start=None, date_end=None, teams=None):
     return fetch_df(sql, params)
 
 
-@st.cache_data(show_spinner=False)
 def load_motoryka_for_compare(date_start=None, date_end=None):
     sql = """
         SELECT Name, Team, Position, DateStart, DateEnd,
@@ -284,11 +321,10 @@ def load_motoryka_for_compare(date_start=None, date_end=None):
     return fetch_df(sql, params)
 
 
-@st.cache_data(show_spinner=False)
 def get_c1_mean_pii(date_start=None, date_end=None):
     """
-    Średni PlayerIntensityIndex dla zespołu C1
-    w zadanym zakresie dat (lub globalnie, jeśli brak zakresu).
+    Średni PlayerIntensityIndex dla zespołu C1 w zadanym zakresie dat.
+    Wykorzystywane w rankingach oraz eksporcie do Excela.
     """
     try:
         df_c1 = load_motoryka_all(date_start, date_end, teams=["C1"])
@@ -298,14 +334,13 @@ def get_c1_mean_pii(date_start=None, date_end=None):
     if df_c1 is None or df_c1.empty or "PlayerIntensityIndex" not in df_c1.columns:
         return np.nan
 
-    return pd.to_numeric(
-        df_c1["PlayerIntensityIndex"], errors="coerce"
-    ).mean()
+    return pd.to_numeric(df_c1["PlayerIntensityIndex"], errors="coerce").mean()
 
 
 # ==========================================
 # Funkcja Excel
 # ==========================================
+
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame) -> BytesIO:
     """
     Eksport profilu zawodnika do Excela:
@@ -434,17 +469,15 @@ with st.sidebar:
              "Indeks – porównania", "Fantasy – przegląd graficzny"],
             key="nav_page_ana",
         )
-
     elif sekcja == "Over/Under":
         page = "Over/Under"
-
     else:  # "Profil zawodnika"
         page = "Profil zawodnika"
-
 
 st.title(" Cracovia – rejestry i analizy")
 
 
+# Helpers dla pozycji
 def extract_positions(series: pd.Series) -> list:
     all_pos = set()
     for val in series.dropna():
@@ -469,12 +502,9 @@ def _explode_positions(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else df.iloc[0:0].copy()
 
 
-def _q25(x: pd.Series):
-    return x.quantile(0.25)
-
-
-def _q75(x: pd.Series):
-    return x.quantile(0.75)
+# ===================== POMOCNICY DO ANALIZY =====================
+def _q25(x: pd.Series): return x.quantile(0.25)
+def _q75(x: pd.Series): return x.quantile(0.75)
 
 
 def flat_agg(df: pd.DataFrame, group_cols: list, num_cols: list) -> pd.DataFrame:
@@ -505,6 +535,8 @@ def download_button_for_df(df, label, filename):
     st.download_button(label, df.to_csv(index=False).encode("utf-8"),
                        file_name=filename, mime="text/csv")
 
+
+# ===================== PORÓWNANIA (Młodzież vs C1) =====================
 
 def load_motoryka_for_compare_wrapper(date_start=None, date_end=None):
     return load_motoryka_for_compare(date_start, date_end)
@@ -540,20 +572,24 @@ def ref_c1_by_position(df: pd.DataFrame):
 
 
 def add_diffs(df, ref, by_position=True):
+    import numpy as np
     df = df.copy()
 
+    # 1) Normalizacja ewentualnych sufiksów po merge
     for base in ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL", "PlayerIntensityIndex"]:
         for suf in ["_x", "_y"]:
             col = base + suf
             if col in df.columns and base not in df.columns:
                 df.rename(columns={col: base}, inplace=True)
 
+    # 2) Metryki, które realnie mamy
     metrics_all = ["HSR_m", "Sprint_m", "ACC", "DECEL", "PlayerIntensityIndex"]
     metrics = [m for m in metrics_all if m in df.columns]
 
     if not metrics:
         return df
 
+    # 3) Jeśli ref to DataFrame
     if isinstance(ref, pd.DataFrame):
         if by_position:
             df = df.merge(ref, on="Position", how="left")
@@ -576,6 +612,7 @@ def add_diffs(df, ref, by_position=True):
 
         return df
 
+    # 4) W przeciwnym razie (ref to np. "C1") – licz średnie z df
     ref_team = ref if isinstance(ref, str) else "C1"
     if by_position and "Position" in df.columns:
         for m in metrics:
@@ -751,7 +788,6 @@ if page == "Porównania":
             unsafe_allow_html=True,
         )
 
-
 # ===================== ANALIZA (pozycje & zespoły) =====================
 elif page == "Analiza (pozycje & zespoły)":
     st.subheader("Analiza statystyk – per pozycja i per zespół")
@@ -840,6 +876,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "DuelWinInBox", "BlockShot", "PktOff", "PktDef"
             ]
 
+            # ------- Pozycja -------
             st.markdown("### Pozycja")
             agg_pos = add_per90_from_sums(
                 flat_agg(df_pos, ["Position"], num_cols),
@@ -861,6 +898,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "fantasypasy_per_position.csv"
             )
 
+            # ------- Zespół -------
             st.markdown("### Zespół")
             agg_team = add_per90_from_sums(
                 flat_agg(df, ["Team"], num_cols),
@@ -882,6 +920,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "fantasypasy_per_team.csv"
             )
 
+            # ------- Zespół × Pozycja -------
             st.markdown("### Zespół × Pozycja")
             agg_pos_team = add_per90_from_sums(
                 flat_agg(df_pos, ["Team", "Position"], num_cols),
@@ -941,6 +980,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "ACC", "DECEL", "PlayerIntensityIndex"
             ]
 
+            # ------- Pozycja -------
             st.markdown("### Pozycja")
             agg_pos = flat_agg(df_pos, ["Position"], num_cols)
             agg_pos_disp = agg_pos.rename(columns={
@@ -953,6 +993,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "motoryka_per_position.csv"
             )
 
+            # ------- Zespół -------
             st.markdown("### Zespół")
             agg_team = flat_agg(df, ["Team"], num_cols)
             agg_team_disp = agg_team.rename(columns={
@@ -965,6 +1006,7 @@ elif page == "Analiza (pozycje & zespoły)":
                 "motoryka_per_team.csv"
             )
 
+            # ------- Zespół × Pozycja -------
             st.markdown("### Zespół × Pozycja")
             agg_pos_team = flat_agg(df_pos, ["Team", "Position"], num_cols)
             agg_pos_team_disp = agg_pos_team.rename(columns={
@@ -1133,7 +1175,6 @@ elif page == "Wykresy zmian":
     st.markdown("### Dane (z nazwą przedziału)")
     st.dataframe(table_view, use_container_width=True)
 
-
 # ===================== FANTASY – PRZEGLĄD GRAFICZNY =====================
 elif page == "Fantasy – przegląd graficzny":
     st.subheader("FANTASYPASY – przegląd graficzny (po drużynie / meczu / obu)")
@@ -1285,7 +1326,6 @@ elif page == "Fantasy – przegląd graficzny":
                 .sort_values(metric, ascending=False)
             )
             st.dataframe(rank_df.head(20), use_container_width=True)
-
 
 # ===================== INDEKS – PORÓWNANIA =====================
 elif page == "Indeks – porównania":
@@ -1511,7 +1551,6 @@ elif page == "Indeks – porównania":
             "PII_vs_team_avg": "Różnica PII vs C1",
         })
         st.dataframe(table_disp, use_container_width=True)
-
 
 # ===================== PROFIL ZAWODNIKA =====================
 elif page == "Profil zawodnika":
@@ -1837,7 +1876,6 @@ elif page == "Profil zawodnika":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="prof_all_excel_download",
             )
-
 
 # ============================================================
 #                     SEKCJA: OVER / UNDER
