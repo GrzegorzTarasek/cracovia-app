@@ -864,12 +864,16 @@ if page == "Porównania":
 elif page == "Analiza (pozycje & zespoły)":
     st.subheader("Analiza statystyk – per pozycja i per zespół")
 
+    # =========================
+    # Wybór zespołów i źródła danych
+    # =========================
     teams_pick = st.multiselect(
         "Zespoły (puste = wszystkie)",
         get_team_list(),
         default=[],
         key="an_team_multi"
     )
+
     src = st.radio(
         "Tabela",
         ["FANTASYPASY", "MOTORYKA"],
@@ -884,16 +888,20 @@ elif page == "Analiza (pozycje & zespoły)":
         key="an_mode"
     )
 
-        ds_a, de_a = None, None
+    # =========================
+    # Ustalenie okresów
+    # =========================
+    ds_a, de_a = None, None
 
-    # Ustalamy, jakie okresy mają REALNE dane dla wybranej tabeli i (opcjonalnie) zespołów
     periods_all = get_periods_df()
     periods = get_periods_with_data(
         "FANTASYPASY" if src == "FANTASYPASY" else "MOTORYKA",
         tuple(teams_pick) if teams_pick else None,
     )
 
-    # ================== TRYB: Okres/Test z rejestru ==================
+    # =========================
+    # TRYB 1 — Okres/Test z rejestru
+    # =========================
     if mode_a == "Okres/Test z rejestru":
         if periods.empty:
             st.info("Brak okresów z danymi w wybranej tabeli (i zespołach).")
@@ -906,48 +914,60 @@ elif page == "Analiza (pozycje & zespoły)":
             sel = periods.iloc[labels.index(pick)]
             ds_a, de_a = sel["DateStart"], sel["DateEnd"]
             st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
-
-    # ================== TRYB: Z istniejących par dat ==================
+    # =========================
+    # TRYB 2 — Z istniejących par dat (tylko tam, gdzie SĄ dane)
+    # =========================
     elif mode_a == "Z istniejących par dat":
-        table = "motoryka_stats" if src == "MOTORYKA" else "fantasypasy_stats"
-
-        pairs = fetch_df(
-            f"""
-            SELECT DISTINCT DateStart, DateEnd
-            FROM {table}
-            ORDER BY DateStart DESC, DateEnd DESC
-            """
-        )
-        if pairs.empty:
-            st.info(f"Brak danych w {table} – wybierz „Ręcznie”.")
+        if src == "FANTASYPASY":
+            df_src = load_fantasy(None, None, teams_pick or None)
         else:
-            pairs["DateStart"] = pd.to_datetime(pairs["DateStart"], errors="coerce")
-            pairs["DateEnd"] = pd.to_datetime(pairs["DateEnd"], errors="coerce")
+            df_src = load_motoryka_all(None, None, teams_pick or None)
 
-            opts = [
-                f"{r.DateStart.date()} → {r.DateEnd.date()}"
-                for _, r in pairs.iterrows()
-            ]
-            pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
-            sel = pairs.iloc[opts.index(pick)]
-            ds_a, de_a = sel["DateStart"], sel["DateEnd"]
-            st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
+        if df_src is None or df_src.empty:
+            st.info("Brak danych w wybranej tabeli (i zespołach) – wybierz „Ręcznie”.")
+        else:
+            df_src = df_src.copy()
+            df_src["DateStart"] = pd.to_datetime(df_src["DateStart"], errors="coerce")
+            df_src["DateEnd"] = pd.to_datetime(df_src["DateEnd"], errors="coerce")
 
-    # ================== TRYB: Ręcznie ==================
+            pairs = (
+                df_src[["DateStart", "DateEnd"]]
+                .dropna()
+                .drop_duplicates()
+                .sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+            )
+
+            if pairs.empty:
+                st.info("Brak poprawnych par dat w danych – wybierz inny tryb.")
+            else:
+                opts = [
+                    f"{r.DateStart.date()} → {r.DateEnd.date()}"
+                    for _, r in pairs.iterrows()
+                ]
+                pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
+                sel = pairs.iloc[opts.index(pick)]
+                ds_a, de_a = sel["DateStart"], sel["DateEnd"]
+                st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
+
+    # =========================
+    # TRYB 3 — Ręcznie
+    # =========================
     else:
         c1, c2 = st.columns(2)
         ds_a = c1.date_input("Od (DateStart)", value=None, key="an_ds")
         de_a = c2.date_input("Do (DateEnd)", value=None, key="an_de")
 
-
-    # ===================== FANTASYPASY =====================
+    # =====================================================
+    #                 ANALIZA – FANTASYPASY
+    # =====================================================
     if src == "FANTASYPASY":
         df = load_fantasy(ds_a, de_a, teams_pick or None)
-        if df.empty:
-            st.info("Brak danych w wybranym zakresie.")
+        if df is None or df.empty:
+            st.info("Brak danych FANTASYPASY w wybranym zakresie.")
         else:
             df_pos = _explode_positions(df)
-            all_pos = sorted(df_pos["Position"].unique().tolist())
+            all_pos = sorted(df_pos["Position"].dropna().unique().tolist())
+
             pos_pick = st.multiselect(
                 "Filtr pozycji (hybrydy uwzględnione)",
                 all_pos,
@@ -965,7 +985,9 @@ elif page == "Analiza (pozycje & zespoły)":
                 "DuelWinInBox", "BlockShot", "PktOff", "PktDef"
             ]
 
-            # ------- Pozycja -------
+            # ---------------------------------
+            #   AGREGACJA: POZYCJA
+            # ---------------------------------
             st.markdown("### Pozycja")
             agg_pos = add_per90_from_sums(
                 flat_agg(df_pos, ["Position"], num_cols),
@@ -983,11 +1005,13 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_pos_disp, use_container_width=True)
             download_button_for_df(
                 agg_pos,
-                " Pobierz CSV (pozycja)",
+                "📥 Pobierz CSV (pozycja)",
                 "fantasypasy_per_position.csv"
             )
 
-            # ------- Zespół -------
+            # ---------------------------------
+            #   AGREGACJA: ZESPÓŁ
+            # ---------------------------------
             st.markdown("### Zespół")
             agg_team = add_per90_from_sums(
                 flat_agg(df, ["Team"], num_cols),
@@ -1005,11 +1029,13 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_team_disp, use_container_width=True)
             download_button_for_df(
                 agg_team,
-                " Pobierz CSV (zespół)",
+                "📥 Pobierz CSV (zespół)",
                 "fantasypasy_per_team.csv"
             )
 
-            # ------- Zespół × Pozycja -------
+            # ---------------------------------
+            #   AGREGACJA: ZESPÓŁ × POZYCJA
+            # ---------------------------------
             st.markdown("### Zespół × Pozycja")
             agg_pos_team = add_per90_from_sums(
                 flat_agg(df_pos, ["Team", "Position"], num_cols),
@@ -1028,7 +1054,7 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_pos_team_disp, use_container_width=True)
             download_button_for_df(
                 agg_pos_team,
-                " Pobierz CSV (zespół×pozycja)",
+                "📥 Pobierz CSV (zespół×pozycja)",
                 "fantasypasy_position_team.csv"
             )
 
@@ -1047,14 +1073,17 @@ elif page == "Analiza (pozycje & zespoły)":
                 unsafe_allow_html=True,
             )
 
-    # ===================== MOTORYKA =====================
+    # =====================================================
+    #                 ANALIZA – MOTORYKA
+    # =====================================================
     else:
         df = load_motoryka_all(ds_a, de_a, teams_pick or None)
-        if df.empty:
-            st.info("Brak danych w wybranym zakresie.")
+        if df is None or df.empty:
+            st.info("Brak danych MOTORYKA w wybranym zakresie.")
         else:
             df_pos = _explode_positions(df)
-            all_pos = sorted(df_pos["Position"].unique().tolist())
+            all_pos = sorted(df_pos["Position"].dropna().unique().tolist())
+
             pos_pick = st.multiselect(
                 "Filtr pozycji (hybrydy uwzględnione)",
                 all_pos,
@@ -1069,7 +1098,9 @@ elif page == "Analiza (pozycje & zespoły)":
                 "ACC", "DECEL", "PlayerIntensityIndex"
             ]
 
-            # ------- Pozycja -------
+            # ---------------------------------
+            #   AGREGACJA: POZYCJA
+            # ---------------------------------
             st.markdown("### Pozycja")
             agg_pos = flat_agg(df_pos, ["Position"], num_cols)
             agg_pos_disp = agg_pos.rename(columns={
@@ -1078,11 +1109,13 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_pos_disp, use_container_width=True)
             download_button_for_df(
                 agg_pos,
-                " Pobierz CSV (pozycja)",
+                "📥 Pobierz CSV (pozycja)",
                 "motoryka_per_position.csv"
             )
 
-            # ------- Zespół -------
+            # ---------------------------------
+            #   AGREGACJA: ZESPÓŁ
+            # ---------------------------------
             st.markdown("### Zespół")
             agg_team = flat_agg(df, ["Team"], num_cols)
             agg_team_disp = agg_team.rename(columns={
@@ -1091,11 +1124,13 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_team_disp, use_container_width=True)
             download_button_for_df(
                 agg_team,
-                " Pobierz CSV (zespół)",
+                "📥 Pobierz CSV (zespół)",
                 "motoryka_per_team.csv"
             )
 
-            # ------- Zespół × Pozycja -------
+            # ---------------------------------
+            #   AGREGACJA: ZESPÓŁ × POZYCJA
+            # ---------------------------------
             st.markdown("### Zespół × Pozycja")
             agg_pos_team = flat_agg(df_pos, ["Team", "Position"], num_cols)
             agg_pos_team_disp = agg_pos_team.rename(columns={
@@ -1105,7 +1140,7 @@ elif page == "Analiza (pozycje & zespoły)":
             st.dataframe(agg_pos_team_disp, use_container_width=True)
             download_button_for_df(
                 agg_pos_team,
-                " Pobierz CSV (zespół×pozycja)",
+                "📥 Pobierz CSV (zespół×pozycja)",
                 "motoryka_position_team.csv"
             )
 
@@ -1124,14 +1159,3 @@ elif page == "Analiza (pozycje & zespoły)":
                 unsafe_allow_html=True,
             )
 
-# -------------------------------------------------
-# Dalej masz niezmienione sekcje:
-#  - "Wykresy zmian"
-#  - "Fantasy – przegląd graficzny"
-#  - "Indeks – porównania"
-#  - "Profil zawodnika"
-#  - "Over/Under"
-# które już działały – możesz zostawić je tak jak w swoim
-# ostatnim działającym pliku, bo tutaj zmiany były tylko
-# wokół fetch_df + Analiza (pozycje & zespoły).
-# -------------------------------------------------
