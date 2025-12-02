@@ -52,7 +52,14 @@ def load_motoryka_table() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_fantasy_table() -> pd.DataFrame:
+    """
+    Próbuje wczytać fantasypasy_stats.csv, a jak go nie ma – fantasypasy.csv.
+    """
+    df = csv_table("fantasypasy_stats")
+    if df is not None and not df.empty:
+        return df
     return csv_table("fantasypasy")
+
 
 
 @st.cache_data(show_spinner=False)
