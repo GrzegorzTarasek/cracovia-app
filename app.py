@@ -1,115 +1,97 @@
 # app.py - WERSJA TYLKO DO ODCZYTU I ANALIZY (CSV z GitHuba)
 
-import streamlit as st
+iimport streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
 from io import BytesIO
 
-# ===================== STAŁE =====================
-POS_OPTIONS = [
-    "ŚO", "LŚO", "PŚO", "LO",
-    "ŚPD", "8", "ŚP", "ŚPO", "10", "PW", "LW", "WAHADŁO", "NAPASTNIK",
-]
-DEFAULT_TEAMS = ["C1", "C2", "U-19", "U-17"]
-
-# ===================== DANE Z GITHUBA (CSV) =====================
-
-# UWAGA: zakładam, że pliki w katalogu `dane/` nazywają się dokładnie:
-#  - players.csv
-#  - teams.csv
-#  - measurement_periods.csv
-#  - motoryka_stats.csv
-#  - fantasypasy_stats.csv
-#
-# Jeśli nazwy są inne, ZMIEŃ odpowiednie stringi w _load_csv(...) poniżej.
+# ===================== DANE Z GITHUBA =====================
 
 BASE_URL = "https://raw.githubusercontent.com/GrzegorzTarasek/cracovia-app/main/dane"
 
+@st.cache_data
+def _load(name):
+    return pd.read_csv(f"{BASE_URL}/{name}")
 
-@st.cache_data(show_spinner=False)
-def _load_csv(filename: str) -> pd.DataFrame:
-    url = f"{BASE_URL}/{filename}"
-    df = pd.read_csv(url)
+@st.cache_data
+def load_players():
+    df = _load("players.csv")
+    df.columns = df.columns.str.strip()
     return df
 
+@st.cache_data
+def load_teams():
+    df = _load("teams.csv")
+    df.columns = df.columns.str.strip()
+    return df
 
-@st.cache_data(show_spinner=False)
-def load_players_table() -> pd.DataFrame:
-    return _load_csv("players.csv")
+@st.cache_data
+def load_periods():
+    df = _load("measurement_periods.csv")
+    df.columns = df.columns.str.strip()
+    df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
+    df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
+    return df
 
+@st.cache_data
+def load_motoryka():
+    df = _load("motoryka_stats.csv")
+    df.columns = df.columns.str.strip()
+    df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce").dt.date
+    df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce").dt.date
+    return df
 
-@st.cache_data(show_spinner=False)
-def load_teams_table() -> pd.DataFrame:
-    return _load_csv("teams.csv")
+@st.cache_data
+def load_fantasy():
+    df = _load("fantasypasy_stats.csv")
+    df.columns = df.columns.str.strip()
+    df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce").dt.date
+    df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce").dt.date
+    return df
 
+# ===================== EMULACJA SQL =====================
 
-@st.cache_data(show_spinner=False)
-def load_periods_table() -> pd.DataFrame:
-    return _load_csv("measurement_periods.csv")
+def fetch_df(sql, params=None):
+    sql = sql.lower().strip()
 
+    # players
+    if "from players" in sql:
+        return load_players()
 
-@st.cache_data(show_spinner=False)
-def load_motoryka_table() -> pd.DataFrame:
-    return _load_csv("motoryka_stats.csv")
+    # teams
+    if "from teams" in sql:
+        return load_teams()
 
+    # periods
+    if "from measurement_periods" in sql:
+        return load_periods()
 
-@st.cache_data(show_spinner=False)
-def load_fantasy_table() -> pd.DataFrame:
-    return _load_csv("fantasypasy_stats.csv")
+    # motoryka by name
+    if "from motoryka_stats" in sql:
+        df = load_motoryka()
+        if params and "name" in params:
+            df = df[df["Name"] == params["name"]]
+        return df
 
+    # fantasy by name
+    if "from fantasypasy_stats" in sql:
+        df = load_fantasy()
+        if params and "name" in params:
+            df = df[df["Name"] == params["name"]]
+        return df
 
-# ===================== ZAMIENNIKI „BAZY” =====================
+    # DISTINCT pairs from motoryka
+    if "distinct datestart" in sql and "motoryka_stats" in sql:
+        df = load_motoryka()
+        return df[["DateStart", "DateEnd"]].drop_duplicates().sort_values(["DateStart","DateEnd"], ascending=[False,False])
 
-def get_team_list():
-    """Lista zespołów z CSV (fallback na DEFAULT_TEAMS)."""
-    try:
-        df = load_teams_table()
-        teams = (
-            df.get("Team", pd.Series(dtype=str))
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-        teams = sorted(teams)
-        return teams or DEFAULT_TEAMS
-    except Exception:
-        return DEFAULT_TEAMS
+    # DISTINCT pairs from fantasy
+    if "distinct datestart" in sql and "fantasypasy_stats" in sql:
+        df = load_fantasy()
+        return df[["DateStart", "DateEnd"]].drop_duplicates().sort_values(["DateStart","DateEnd"], ascending=[False,False])
 
+    return pd.DataFrame()
 
-def get_player_list():
-    """Lista zawodników z CSV."""
-    try:
-        df = load_players_table()
-        players = (
-            df.get("Name", pd.Series(dtype=str))
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-        return sorted(players)
-    except Exception:
-        return []
-
-
-def get_periods_df():
-    """Lista okresów pomiarowych z CSV."""
-    try:
-        df = load_periods_table().copy()
-        # upewniamy się, że daty są datetime
-        if "DateStart" in df.columns:
-            df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-        if "DateEnd" in df.columns:
-            df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-        # sortowanie tak jak w SQL: DESC po DateStart, potem Label
-        return df.sort_values(
-            ["DateStart", "Label"],
-            ascending=[False, True],
-        )
-    except Exception:
-        return pd.DataFrame(columns=["PeriodID", "Label", "DateStart", "DateEnd"])
 
 
 # ===================== FUNKCJE WCZYTYWANIA (CSV ZAMIENIAJĄ SQL) =====================
