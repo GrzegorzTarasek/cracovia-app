@@ -835,23 +835,36 @@ elif page == "Analiza (pozycje & zespoły)":
             ds_a, de_a = sel["DateStart"], sel["DateEnd"]
             st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
 
-    elif mode_a == "Z istniejących par dat":
-        table = "motoryka_stats" if src == "MOTORYKA" else "fantasypasy_stats"
-        pairs = fetch_df(
-            f"SELECT DISTINCT DateStart, DateEnd "
-            f"FROM {table} "
-            f"ORDER BY DateStart DESC, DateEnd DESC"
-        )
-        if pairs.empty:
-            st.info(f"Brak danych w {table} – wybierz „Ręcznie”.")
+        elif mode_a == "Z istniejących par dat":
+        # Bierzemy pary dat tylko z danych po filtrze: źródło (FANTASYPASY/MOTORYKA) + wybrane zespoły
+        if src == "MOTORYKA":
+            df_base = load_motoryka_all(None, None, teams_pick or None)
+        else:  # FANTASYPASY
+            df_base = load_fantasy(None, None, teams_pick or None)
+
+        if df_base is None or df_base.empty:
+            st.info("Brak danych dla wybranych zespołów – wybierz inne zespoły lub tryb „Ręcznie”.")
         else:
-            pairs["DateStart"] = pd.to_datetime(pairs["DateStart"], errors="coerce")
-            pairs["DateEnd"] = pd.to_datetime(pairs["DateEnd"], errors="coerce")
-            opts = [f"{r.DateStart.date()} → {r.DateEnd.date()}" for _, r in pairs.iterrows()]
-            pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
-            sel = pairs.iloc[opts.index(pick)]
-            ds_a, de_a = sel["DateStart"], sel["DateEnd"]
-            st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
+            df_base = df_base.copy()
+            df_base["DateStart"] = pd.to_datetime(df_base["DateStart"], errors="coerce")
+            df_base["DateEnd"] = pd.to_datetime(df_base["DateEnd"], errors="coerce")
+
+            pairs = (
+                df_base[["DateStart", "DateEnd"]]
+                .dropna()
+                .drop_duplicates()
+                .sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+            )
+
+            if pairs.empty:
+                st.info("Brak par dat po zastosowaniu filtrów – zmień filtry lub wybierz inny tryb.")
+            else:
+                opts = [f"{r.DateStart.date()} → {r.DateEnd.date()}" for _, r in pairs.iterrows()]
+                pick = st.selectbox("Para dat", opts, index=0, key="an_pick_pair")
+                sel = pairs.iloc[opts.index(pick)]
+                ds_a, de_a = sel["DateStart"], sel["DateEnd"]
+                st.caption(f"Zakres: {ds_a.date()} → {de_a.date()}")
+
 
     else:
         c1, c2 = st.columns(2)
