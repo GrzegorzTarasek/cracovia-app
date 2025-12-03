@@ -1777,6 +1777,92 @@ st.dataframe(
     use_container_width=True
 )
 
+# =====================================================================
+# C) RANKING OKRESÓW WG MEDIANY (PII + metryki per minuta)
+# =====================================================================
+st.markdown("### Ranking okresów wg mediany (PII + metryki per minuta)")
+
+if not moto.empty:
+
+    # upewniamy się, że mamy RangeLabel
+    if "RangeLabel" in moto.columns:
+
+        # ----------- Ranking wg MEDIANY PII -----------
+        if "PlayerIntensityIndex" in moto.columns:
+            pii_rank = (
+                moto.groupby("RangeLabel")["PlayerIntensityIndex"]
+                .median()
+                .dropna()
+                .sort_values(ascending=False)
+            )
+
+            st.markdown("#### TOP 5 okresów – Mediana PII")
+            st.dataframe(pii_rank.head(5).to_frame("Mediana PII"), use_container_width=True)
+
+            st.markdown("#### Najsłabsze 5 okresów – Mediana PII")
+            st.dataframe(pii_rank.tail(5).to_frame("Mediana PII"), use_container_width=True)
+
+        # ----------- Ranking wg MEDIANY metryk per minuta -----------
+        metric_cols = [c for c in moto.columns if c.endswith("_per_min")]
+
+        if metric_cols:
+            ranking_rows = []
+            for c in metric_cols:
+                med_series = (
+                    moto.groupby("RangeLabel")[c]
+                    .median()
+                    .dropna()
+                    .sort_values(ascending=False)
+                )
+                for period, val in med_series.items():
+                    ranking_rows.append({
+                        "Okres": period,
+                        "Metryka": c.replace("_per_min", ""),
+                        "Mediana": round(val, 3)
+                    })
+
+            rank_df = pd.DataFrame(ranking_rows)
+
+            st.markdown("#### Ranking okresów wg mediany (wszystkie metryki)")
+
+            st.dataframe(
+                rank_df.sort_values(["Metryka", "Mediana"], ascending=[True, False]),
+                use_container_width=True
+            )
+    else:
+        st.info("Brak etykiet okresów pomiarowych.")
+# =====================================================================
+# D) FILTR POZYCJI – działa tylko w profilu zawodnika
+# =====================================================================
+# Pos w players_table może wyglądać np. "ŚP/10" albo "ŚO"
+pos_raw = str(prow["Position"]) if "Position" in prow else None
+
+if pos_raw and pos_raw not in ["", "None", "nan"]:
+    # Rozbijamy pozycje po "/" i usuwamy spacje
+    positions = [p.strip() for p in pos_raw.replace(",", "/").split("/") if p.strip()]
+else:
+    positions = []
+
+# Jeśli zawodnik ma kilka pozycji → pokaż selektor
+if len(positions) > 1:
+    selected_position = st.selectbox(
+        "Wybierz pozycję do analizy:",
+        positions,
+        key="prof_all_position_filter"
+    )
+elif len(positions) == 1:
+    selected_position = positions[0]
+else:
+    selected_position = None
+
+# W tym miejscu selected_position przechowuje:
+# - None → brak filtrowania
+# - "ŚP", "10", "LW", itp.
+
+st.markdown(
+    f"*Analiza wykonywana dla pozycji:* **{selected_position or 'brak danych'}**"
+)
+
 # ============================================================
 #                 SEKCJA: OVER / UNDER
 # ============================================================
