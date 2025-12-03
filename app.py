@@ -163,7 +163,7 @@ def fetch_df(sql: str, params=None):
 
     return pd.DataFrame()
 
-
+ 
 # ============================================================
 #         POPRAWIONE POBIERANIE OKRESÓW TYLKO Z DANYMI
 # ============================================================
