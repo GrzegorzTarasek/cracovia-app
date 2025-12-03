@@ -57,33 +57,38 @@ def load_periods_table():
 @st.cache_data(show_spinner=False)
 def get_periods_df():
     """
-    Zwraca DataFrame z okresami pomiarowymi:
-    kolumny: PeriodID, Label, DateStart, DateEnd
-    Posortowane malejąco po dacie startu.
+    Zwraca okresy pomiarowe measurement_periods
+    w formacie: PeriodID, Label, DateStart, DateEnd.
+    NIE korzysta z TABLES["periods"], więc nie wywala błędu.
     """
+
     try:
+        # spróbuj użyć Twojego loadera CSV lub DB
         df = load_periods_table().copy()
-        if df.empty:
-            return pd.DataFrame(
-                columns=["PeriodID", "Label", "DateStart", "DateEnd"]
-            )
+    except Exception:
+        df = pd.DataFrame()
 
-        # konwersja dat
-        if "DateStart" in df.columns:
-            df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
-        if "DateEnd" in df.columns:
-            df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
-
-        cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
-
-        df = (
-            df[cols]
-            .dropna(subset=["DateStart", "DateEnd"])
-            .drop_duplicates()
-            .sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+    # Jeśli brak danych – zwróć pustą tabelę z poprawnymi kolumnami
+    if df is None or df.empty:
+        return pd.DataFrame(
+            columns=["PeriodID", "Label", "DateStart", "DateEnd"]
         )
 
-        return df
+    # Konwersja dat
+    if "DateStart" in df.columns:
+        df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce").dt.date
+    if "DateEnd" in df.columns:
+        df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce").dt.date
+
+    # Upewniamy się, że mamy właściwe kolumny
+    cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
+    df = df[cols].dropna(subset=["DateStart", "DateEnd"]).drop_duplicates()
+
+    # Sortowanie jak wcześniej – najnowsze okresy na górze
+    df = df.sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+
+    return df
+
 
     except Exception:
         # w razie jakiegokolwiek błędu – pusta ramka w oczekiwanym formacie
