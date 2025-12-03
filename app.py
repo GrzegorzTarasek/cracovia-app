@@ -90,11 +90,6 @@ def get_periods_df():
     return df
 
 
-    except Exception:
-        # w razie jakiegokolwiek błędu – pusta ramka w oczekiwanym formacie
-        return pd.DataFrame(
-            columns=["PeriodID", "Label", "DateStart", "DateEnd"]
-        )
 
 # ============================================================
 #                 POPRAWIONA FUNKCJA fetch_df
