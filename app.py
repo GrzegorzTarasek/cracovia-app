@@ -2196,3 +2196,229 @@ elif sekcja == "Over/Under":
             )
         else:
             st.info("Brak danych do zbudowania tabeli przypisanych zespołów dla zawodnika.")
+# ==================================================================
+    #                 TAB 2 – METRYKI PER MINUTA
+    # ==================================================================
+    with tab_metrics:
+        st.subheader("Over/Under – metryki per minuta względem zespołu")
+
+        per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
+
+        df2 = df.copy()
+        for c in per_min_cols:
+            df2[c + "_per_min"] = (
+                pd.to_numeric(df2.get(c), errors="coerce") / df2["Minutes"]
+            ).replace([np.inf, -np.inf], np.nan)
+
+        metrics = [m + "_per_min" for m in per_min_cols]
+        metrics_pick = st.multiselect(
+            "Metryki",
+            metrics,
+            default=metrics,
+            key="ou_metrics_pick",
+        )
+
+        if not metrics_pick:
+            st.info("Wybierz przynajmniej jedną metrykę.")
+            st.stop()
+
+        # średnie metryk per minuta – zawodnik
+        pm = (
+            df2.groupby(["Team", "Name"])[metrics_pick]
+            .mean()
+            .reset_index()
+        )
+
+        # średnie metryk per minuta – team
+        tm = (
+            df2.groupby("Team")[metrics_pick]
+            .mean()
+            .reset_index()
+            .rename(columns={m: m + "_team" for m in metrics_pick})
+        )
+
+        merged_m = pm.merge(tm, on="Team", how="left")
+
+        rows = []
+        for _, row in merged_m.iterrows():
+            for m in metrics_pick:
+                t = row[m + "_team"]
+                p = row[m]
+                if pd.isna(t) or pd.isna(p) or t == 0:
+                    continue
+                rows.append({
+                    "Team": row["Team"],
+                    "Player": row["Name"],
+                    "Metric": m.replace("_per_min", ""),
+                    "Player_mean": p,
+                    "Team_mean": t,
+                    "diff_abs": p - t,
+                    "diff_pct": (p / t - 1) * 100,
+                })
+
+        out = pd.DataFrame(rows)
+
+        if out.empty:
+            st.info("Brak danych do analizy metryk per minuta.")
+            st.stop()
+
+        threshold_m = st.slider(
+            "Próg (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=5.0,
+            step=1.0,
+            key="ou_metrics_threshold",
+        )
+
+        out["Status"] = out["diff_pct"].apply(
+            lambda x: "Over" if x >= threshold_m else ("Under" if x <= -threshold_m else "Neutral")
+        )
+
+        st.dataframe(
+            out.sort_values(["Team", "Metric", "diff_pct"], ascending=[True, True, False])
+            .rename(columns={
+                "Team": "Zespół",
+                "Player": "Zawodnik",
+                "Metric": "Metryka",
+                "Player_mean": "Średnia zawodnika (na min)",
+                "Team_mean": "Średnia zespołu (na min)",
+                "diff_abs": "Różnica bezwzględna",
+                "diff_pct": "Różnica (%)",
+                "Status": "Status",
+            })
+            .round({
+                "Średnia zawodnika (na min)": 3,
+                "Średnia zespołu (na min)": 3,
+                "Różnica bezwzględna": 3,
+                "Różnica (%)": 1,
+            }),
+            use_container_width=True,
+        )
+
+    # ==================================================================
+    #       TAB 3 – OKRESY POMIAROWE (PII W TABELCE)
+    # ==================================================================
+    with tab_periods:
+        st.subheader("PII – Over/Under w wybranych okresach pomiarowych (tabela)")
+
+        df_pii = df.dropna(subset=["PlayerIntensityIndex", "DateStart", "DateEnd"]).copy()
+
+        if df_pii.empty:
+            st.info("Brak danych PII z kompletnymi okresami pomiarowymi.")
+            st.stop()
+
+        periods = (
+            df_pii[["DateStart", "DateEnd"]]
+            .drop_duplicates()
+            .sort_values(["DateStart", "DateEnd"])
+        )
+        periods["Label"] = periods["DateStart"].astype(str) + " → " + periods["DateEnd"].astype(str)
+
+        option = st.selectbox(
+            "Okres pomiaru (tylko daty, w których SĄ pomiary motoryki)",
+            options=periods["Label"].tolist(),
+            key="ou_period_select",
+        )
+
+        row_sel = periods[periods["Label"] == option].iloc[0]
+        d_start = row_sel["DateStart"]
+        d_end = row_sel["DateEnd"]
+
+        st.caption(f"Wybrany okres: **{d_start} → {d_end}**")
+
+        # filtr na dany okres
+        df_period = df_pii[
+            (df_pii["DateStart"] == d_start) &
+            (df_pii["DateEnd"] == d_end)
+        ].copy()
+
+        if df_period.empty:
+            st.info("Brak danych PII dla wybranego okresu.")
+            st.stop()
+
+        # PII per zawodnik w tym okresie
+        player_pii_p = (
+            df_period
+            .groupby(["Team", "Name"])["PlayerIntensityIndex"]
+            .mean()
+            .reset_index()
+            .rename(columns={"PlayerIntensityIndex": "PII_player"})
+        )
+
+        # PII per team w tym okresie
+        team_pii_p = (
+            df_period
+            .groupby("Team")["PlayerIntensityIndex"]
+            .mean()
+            .reset_index()
+            .rename(columns={"PlayerIntensityIndex": "PII_team"})
+        )
+
+        merged_p = player_pii_p.merge(team_pii_p, on="Team", how="left")
+
+        merged_p["diff_abs"] = merged_p["PII_player"] - merged_p["PII_team"]
+        merged_p["diff_pct"] = (
+            merged_p["PII_player"] / merged_p["PII_team"] - 1.0
+        ) * 100.0
+
+        threshold_p = st.slider(
+            "Próg Over/Under dla PII w tym okresie (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=5.0,
+            step=1.0,
+            key="ou_period_threshold",
+        )
+
+        merged_p["Status"] = merged_p["diff_pct"].apply(
+            lambda x: "Over" if x >= threshold_p else ("Under" if x <= -threshold_p else "Neutral")
+        )
+
+        status_filter = st.multiselect(
+            "Których zawodników pokazać?",
+            options=["Over", "Under", "Neutral"],
+            default=["Over", "Under"],
+            key="ou_period_status_filter",
+        )
+
+        team_filter = st.multiselect(
+            "Filtr zespołów",
+            options=sorted(merged_p["Team"].unique().tolist()),
+            key="ou_period_team_filter",
+        )
+
+        view_p = merged_p.copy()
+        if status_filter:
+            view_p = view_p[view_p["Status"].isin(status_filter)]
+        if team_filter:
+            view_p = view_p[view_p["Team"].isin(team_filter)]
+
+        if view_p.empty:
+            st.info("Brak zawodników spełniających kryteria w tym okresie.")
+            st.stop()
+
+        view_p = view_p.sort_values(["Team", "diff_pct"], ascending=[True, False])
+
+        st.markdown("### Tabela – zawodnicy Over/Under w wybranym okresie (PII vs zespół)")
+        st.dataframe(
+            view_p[
+                ["Team", "Name", "PII_player", "PII_team", "diff_abs", "diff_pct", "Status"]
+            ]
+            .rename(columns={
+                "Team": "Zespół",
+                "Name": "Zawodnik",
+                "PII_player": "PII zawodnika",
+                "PII_team": "Średnie PII zespołu",
+                "diff_abs": "Różnica bezwzględna",
+                "diff_pct": "Różnica (%)",
+                "Status": "Status",
+            })
+            .round({
+                "PII zawodnika": 3,
+                "Średnie PII zespołu": 3,
+                "Różnica bezwzględna": 3,
+                "Różnica (%)": 1,
+            }),
+            use_container_width=True,
+        )
