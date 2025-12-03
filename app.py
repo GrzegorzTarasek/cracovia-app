@@ -1431,39 +1431,84 @@ elif page == "Indeks – porównania":
 elif page == "Profil zawodnika":
     st.subheader("Profil zawodnika – pełny przegląd")
 
-    # --- wczytanie zawodników bezpośrednio z players_table.csv ---
+    # 1. Spróbuj wczytać listę zawodników z players_table.csv
     players_df = load_players_table().copy()
+    players_list: list[str] = []
 
-    if players_df is None or players_df.empty or "Name" not in players_df.columns:
-        st.info("Brak zawodników w pliku players_table.csv.")
+    if not players_df.empty and "Name" in players_df.columns:
+        # standardowy wariant – mamy normalny plik players_table.csv
+        players_df = players_df.dropna(subset=["Name"])
+        players_list = sorted(players_df["Name"].astype(str).unique().tolist())
+    else:
+        # 2. Fallback: budujemy listę zawodników z motoryka_stats i fantasypasy_stats
+        moto_raw = load_motoryka_table().copy()
+        fant_raw = load_fantasy_table().copy()
+
+        names = set()
+
+        if not moto_raw.empty and "Name" in moto_raw.columns:
+            names.update(moto_raw["Name"].dropna().astype(str).unique().tolist())
+
+        if not fant_raw.empty and "Name" in fant_raw.columns:
+            names.update(fant_raw["Name"].dropna().astype(str).unique().tolist())
+
+        players_list = sorted(names)
+
+        # Zbuduj przybliżony players_df (Name, Team, Position) na podstawie istniejących danych
+        guessed_rows = []
+
+        if not moto_raw.empty:
+            cols_m = [c for c in ["Name", "Team", "Position"] if c in moto_raw.columns]
+            if cols_m:
+                guessed_rows.append(moto_raw[cols_m].copy())
+
+        if not fant_raw.empty:
+            cols_f = [c for c in ["Name", "Team", "Position"] if c in fant_raw.columns]
+            if cols_f:
+                guessed_rows.append(fant_raw[cols_f].copy())
+
+        if guessed_rows:
+            merged = pd.concat(guessed_rows, ignore_index=True)
+            merged = merged.dropna(subset=["Name"])
+            # dla każdego zawodnika bierzemy najczęściej występujący Team/Position
+            players_df = (
+                merged.groupby("Name", as_index=False)
+                .agg(lambda x: x.mode().iloc[0] if not x.mode().empty else None)
+            )
+        else:
+            # totalny fallback – żadnych danych
+            players_df = pd.DataFrame(columns=["Name", "Team", "Position"])
+
+    # jeśli dalej nie ma zawodników – kończymy sekcję
+    if not players_list:
+        st.info("Brak zawodników w danych (motoryka / fantasypasy / players_table.csv).")
         st.stop()
 
-    # dopilnuj, żeby były kolumny Team i Position (jeśli brak – tworzymy puste)
-    if "Team" not in players_df.columns:
-        players_df["Team"] = ""
-    if "Position" not in players_df.columns:
-        players_df["Position"] = ""
-
-    players_df = (
-        players_df[["Name", "Team", "Position"]]
-        .dropna(subset=["Name"])
-        .drop_duplicates()
-        .sort_values("Name")
+    # wybór zawodnika z listy
+    p = st.selectbox(
+        "Zawodnik",
+        players_list,
+        key="prof_all_player",
     )
 
-    players_list = players_df["Name"].tolist()
-
-    p = st.selectbox("Zawodnik", players_list if players_list else [], key="prof_all_player")
     if not p:
-        st.info("Brak zawodników w rejestrze.")
+        st.info("Wybierz zawodnika.")
         st.stop()
 
-    prow = players_df[players_df["Name"] == p].iloc[0] if not players_df.empty else None
-    team_label = str(prow["Team"]) if prow is not None else "—"
-    pos_str = str(prow["Position"] or "—")
+    # próbujemy wyciągnąć Team / Position dla podpisu pod nagłówkiem
+    prow = None
+    if not players_df.empty and "Name" in players_df.columns:
+        mask = players_df["Name"].astype(str) == str(p)
+        if mask.any():
+            prow = players_df[mask].iloc[0]
+
+    team_label = str(prow["Team"]) if (prow is not None and "Team" in prow) else "—"
+    pos_str = str(prow["Position"]) if (prow is not None and "Position" in prow) else "—"
+
     st.caption(f"**Zespół:** {team_label}   •   **Domyślne pozycje:** {pos_str}")
 
-    # --------- dane MOTORYKA i FANTASYPASY dla zawodnika ---------
+    # ===================== Wczytanie danych MOTORYKA / FANTASYPASY dla zawodnika =====================
+
     q_moto = """
         SELECT *
         FROM motoryka_stats
@@ -1487,7 +1532,7 @@ elif page == "Profil zawodnika":
 
     per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
 
-    # ======== przygotowanie MOTORYKA ========
+    # ---------------- MOTORYKA – przygotowanie ----------------
     if not moto.empty:
         moto = moto.copy()
         moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
@@ -1553,7 +1598,7 @@ elif page == "Profil zawodnika":
         else:
             moto["PII_vs_team_avg"] = np.nan
 
-    # ======== przygotowanie FANTASYPASY ========
+    # ---------------- FANTASYPASY – przygotowanie ----------------
     if not fant.empty:
         fant = fant.copy()
         fant["Minutes"] = pd.to_numeric(fant.get("Minutes"), errors="coerce")
@@ -1562,7 +1607,7 @@ elif page == "Profil zawodnika":
         ) / 2
         fant["DateMid"] = mid_f.dt.date
 
-    # krótkie podsumowanie ilości meczów / minut
+    # krótkie podsumowanie liczby meczów/minut
     if not moto.empty:
         mecze_m = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
         min_m = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
