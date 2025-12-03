@@ -1525,87 +1525,26 @@ elif page == "Indeks – porównania":
 #                 STRONA: PROFIL ZAWODNIKA
 # ============================================================
 
+# ===================== PROFIL ZAWODNIKA =====================
 elif page == "Profil zawodnika":
     st.subheader("Profil zawodnika – pełny przegląd")
 
-    # 1. Spróbuj wczytać listę zawodników z players_table.csv
-    players_df = load_players_table().copy()
-    players_list: list[str] = []
+    # --- lista zawodników z CSV (players_table.csv) przez fetch_df ---
+    players_df = fetch_df("SELECT Name, Team, Position FROM players ORDER BY Name;")
+    players_list = players_df["Name"].dropna().tolist() if not players_df.empty else []
 
-    if not players_df.empty and "Name" in players_df.columns:
-        # standardowy wariant – mamy normalny plik players_table.csv
-        players_df = players_df.dropna(subset=["Name"])
-        players_list = sorted(players_df["Name"].astype(str).unique().tolist())
-    else:
-        # 2. Fallback: budujemy listę zawodników z motoryka_stats i fantasypasy_stats
-        moto_raw = load_motoryka_table().copy()
-        fant_raw = load_fantasy_table().copy()
-
-        names = set()
-
-        if not moto_raw.empty and "Name" in moto_raw.columns:
-            names.update(moto_raw["Name"].dropna().astype(str).unique().tolist())
-
-        if not fant_raw.empty and "Name" in fant_raw.columns:
-            names.update(fant_raw["Name"].dropna().astype(str).unique().tolist())
-
-        players_list = sorted(names)
-
-        # Zbuduj przybliżony players_df (Name, Team, Position) na podstawie istniejących danych
-        guessed_rows = []
-
-        if not moto_raw.empty:
-            cols_m = [c for c in ["Name", "Team", "Position"] if c in moto_raw.columns]
-            if cols_m:
-                guessed_rows.append(moto_raw[cols_m].copy())
-
-        if not fant_raw.empty:
-            cols_f = [c for c in ["Name", "Team", "Position"] if c in fant_raw.columns]
-            if cols_f:
-                guessed_rows.append(fant_raw[cols_f].copy())
-
-        if guessed_rows:
-            merged = pd.concat(guessed_rows, ignore_index=True)
-            merged = merged.dropna(subset=["Name"])
-            # dla każdego zawodnika bierzemy najczęściej występujący Team/Position
-            players_df = (
-                merged.groupby("Name", as_index=False)
-                .agg(lambda x: x.mode().iloc[0] if not x.mode().empty else None)
-            )
-        else:
-            # totalny fallback – żadnych danych
-            players_df = pd.DataFrame(columns=["Name", "Team", "Position"])
-
-    # jeśli dalej nie ma zawodników – kończymy sekcję
-    if not players_list:
-        st.info("Brak zawodników w danych (motoryka / fantasypasy / players_table.csv).")
-        st.stop()
-
-    # wybór zawodnika z listy
-    p = st.selectbox(
-        "Zawodnik",
-        players_list,
-        key="prof_all_player",
-    )
-
+    p = st.selectbox("Zawodnik", players_list if players_list else [], key="prof_all_player")
     if not p:
-        st.info("Wybierz zawodnika.")
+        st.info("Brak zawodników w rejestrze (players_table.csv).")
         st.stop()
 
-    # próbujemy wyciągnąć Team / Position dla podpisu pod nagłówkiem
-    prow = None
-    if not players_df.empty and "Name" in players_df.columns:
-        mask = players_df["Name"].astype(str) == str(p)
-        if mask.any():
-            prow = players_df[mask].iloc[0]
+    # wiersz z informacją o zespole i pozycjach
+    prow = players_df[players_df["Name"] == p].iloc[0] if not players_df.empty else None
+    team_label = str(prow["Team"]) if prow is not None else "—"
+    pos_str = str(prow["Position"] or "—") if prow is not None else "—"
+    st.caption(f"Zespół: **{team_label}**  •  Domyślne pozycje: **{pos_str}**")
 
-    team_label = str(prow["Team"]) if (prow is not None and "Team" in prow) else "—"
-    pos_str = str(prow["Position"]) if (prow is not None and "Position" in prow) else "—"
-
-    st.caption(f"**Zespół:** {team_label}   •   **Domyślne pozycje:** {pos_str}")
-
-    # ===================== Wczytanie danych MOTORYKA / FANTASYPASY dla zawodnika =====================
-
+    # --- dane MOTORYKA zawodnika (z CSV motoryka_stats) ---
     q_moto = """
         SELECT *
         FROM motoryka_stats
@@ -1614,6 +1553,7 @@ elif page == "Profil zawodnika":
     """
     moto = fetch_df(q_moto, {"name": p})
 
+    # --- dane FANTASYPASY zawodnika (z CSV fantasypasy_stats) ---
     q_fant = """
         SELECT *
         FROM fantasypasy_stats
@@ -1629,33 +1569,37 @@ elif page == "Profil zawodnika":
 
     per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
 
-    # ---------------- MOTORYKA – przygotowanie ----------------
+    # ================== PRZYGOTOWANIE MOTORYKI ==================
     if not moto.empty:
         moto = moto.copy()
-        moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
 
+        # minuty + metryki per minuta
+        moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
         for m in per_min_cols:
             if m in moto.columns:
-                moto[m + "_per_min"] = pd.to_numeric(moto[m], errors="coerce") / moto["Minutes"]
+                moto[m + "_per_min"] = (
+                    pd.to_numeric(moto[m], errors="coerce") / moto["Minutes"]
+                ).replace([np.inf, -np.inf], np.nan)
             else:
                 moto[m + "_per_min"] = np.nan
 
-        mid_m = pd.to_datetime(moto["DateStart"]) + (
-            pd.to_datetime(moto["DateEnd"]) - pd.to_datetime(moto["DateStart"])
+        # środek zakresu dat + label okresu (z measurement_periods.csv)
+        mid_m = pd.to_datetime(moto["DateStart"], errors="coerce") + (
+            pd.to_datetime(moto["DateEnd"], errors="coerce") -
+            pd.to_datetime(moto["DateStart"], errors="coerce")
         ) / 2
         moto["DateMid"] = mid_m.dt.date
 
         periods = get_periods_df()
-
         moto["RangeFallback"] = (
             moto["DateStart"].astype(str) + " → " + moto["DateEnd"].astype(str)
         )
 
         if not periods.empty:
             moto = moto.merge(
-                periods,
+                periods[["DateStart", "DateEnd", "Label"]],
                 on=["DateStart", "DateEnd"],
-                how="left"
+                how="left",
             )
             moto["RangeLabel"] = moto["Label"].where(
                 moto["Label"].notna(), moto["RangeFallback"]
@@ -1663,9 +1607,9 @@ elif page == "Profil zawodnika":
         else:
             moto["RangeLabel"] = moto["RangeFallback"]
 
+        # PII + różnica do średniej zespołu w danym okresie
         moto["PlayerIntensityIndex"] = pd.to_numeric(
-            moto.get("PlayerIntensityIndex"),
-            errors="coerce"
+            moto.get("PlayerIntensityIndex"), errors="coerce"
         )
 
         try:
@@ -1679,6 +1623,7 @@ elif page == "Profil zawodnika":
                 all_m["PlayerIntensityIndex"], errors="coerce"
             )
 
+            # średnia PII per zespół i zakres dat
             team_mean = (
                 all_m.groupby(["Team", "DateStart", "DateEnd"], as_index=False)["PlayerIntensityIndex"]
                 .mean()
@@ -1688,43 +1633,44 @@ elif page == "Profil zawodnika":
             moto = moto.merge(
                 team_mean,
                 on=["Team", "DateStart", "DateEnd"],
-                how="left"
+                how="left",
             )
 
             moto["PII_vs_team_avg"] = moto["PlayerIntensityIndex"] - moto["Team_PII_mean"]
         else:
             moto["PII_vs_team_avg"] = np.nan
 
-    # ---------------- FANTASYPASY – przygotowanie ----------------
+    # ================== PRZYGOTOWANIE FANTASYPASY ==================
     if not fant.empty:
         fant = fant.copy()
         fant["Minutes"] = pd.to_numeric(fant.get("Minutes"), errors="coerce")
-        mid_f = pd.to_datetime(fant["DateStart"]) + (
-            pd.to_datetime(fant["DateEnd"]) - pd.to_datetime(fant["DateStart"])
+
+        mid_f = pd.to_datetime(fant["DateStart"], errors="coerce") + (
+            pd.to_datetime(fant["DateEnd"], errors="coerce") -
+            pd.to_datetime(fant["DateStart"], errors="coerce")
         ) / 2
         fant["DateMid"] = mid_f.dt.date
 
-    # krótkie podsumowanie liczby meczów/minut
+    # ================== PODSUMOWANIA MECZE / MINUTY ==================
     if not moto.empty:
-        mecze_m = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
-        min_m = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
-        mecze_m = int(mecze_m) if pd.notna(mecze_m) else 0
-        min_m = int(min_m) if pd.notna(min_m) else 0
-        st.caption(f"MOTORYKA: mecze = {mecze_m}, minuty = {min_m}")
+        mecze_m = int(pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum() or 0)
+        min_m = int(pd.to_numeric(moto.get("Minutes"), errors="coerce").sum() or 0)
+        st.caption(f"MOTORYKA – mecze: {mecze_m}, minuty: {min_m}")
 
     if not fant.empty:
-        mecze_f = pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()
-        min_f = pd.to_numeric(fant.get("Minutes"), errors="coerce").sum()
-        mecze_f = int(mecze_f) if pd.notna(mecze_f) else 0
-        min_f = int(min_f) if pd.notna(min_f) else 0
-        st.caption(f"FANTASYPASY: mecze = {mecze_f}, minuty = {min_f}")
+        mecze_f = int(pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum() or 0)
+        min_f = int(pd.to_numeric(fant.get("Minutes"), errors="coerce").sum() or 0)
+        st.caption(f"FANTASYPASY – mecze: {mecze_f}, minuty: {min_f}")
 
+    # ================== ZAKŁADKI PROFILU ==================
     tabs_prof = st.tabs(["Motoryka", "Indeks", "FANTASYPASY", "Tabele i eksport"])
 
-    # 1) MOTORYKA
+    # ------------------------------------------------------
+    # 1) ZAKŁADKA: MOTORYKA
+    # ------------------------------------------------------
     with tabs_prof[0]:
         if moto.empty:
-            st.info("Brak danych motorycznych.")
+            st.info("Brak danych motorycznych dla tego zawodnika.")
         else:
             st.markdown("### Metryki motoryczne na minutę – przebieg w czasie")
 
@@ -1732,7 +1678,7 @@ elif page == "Profil zawodnika":
                 "Metryki (na minutę)",
                 [m + "_per_min" for m in per_min_cols],
                 default=["TD_m_per_min"],
-                key="prof_all_moto_metrics"
+                key="prof_all_moto_metrics",
             )
 
             if pick_m:
@@ -1756,6 +1702,7 @@ elif page == "Profil zawodnika":
 
                 st.altair_chart(chart_m, use_container_width=True)
 
+            # ---- podsumowanie per zakres: mean + median ----
             st.markdown("### Podsumowanie metryk na zakres pomiaru")
             if "RangeLabel" in moto.columns:
                 agg_cols = [c for c in moto.columns if c.endswith("_per_min")]
@@ -1768,7 +1715,7 @@ elif page == "Profil zawodnika":
                     st.dataframe(summary, use_container_width=True)
 
             st.markdown("---")
-            st.subheader("Zawodnik vs C1 – per minuta (globalnie)")
+            st.subheader("Zawodnik vs C1 – metryki per minuta (globalnie)")
 
             try:
                 df_all_for_ref = load_motoryka_all(None, None, None).copy()
@@ -1776,7 +1723,7 @@ elif page == "Profil zawodnika":
                 df_all_for_ref = pd.DataFrame()
 
             if df_all_for_ref.empty or df_all_for_ref[df_all_for_ref["Team"] == "C1"].empty:
-                st.info("Brak danych referencyjnych C1.")
+                st.info("Brak danych referencyjnych C1 dla porównania per minuta.")
             else:
                 df_all_for_ref["Minutes"] = pd.to_numeric(
                     df_all_for_ref["Minutes"], errors="coerce"
@@ -1787,37 +1734,41 @@ elif page == "Profil zawodnika":
                         df_all_for_ref[m + "_per_min"] = (
                             pd.to_numeric(df_all_for_ref[m], errors="coerce")
                             / df_all_for_ref["Minutes"]
-                        )
+                        ).replace([np.inf, -np.inf], np.nan)
 
                 ref_c1 = df_all_for_ref[df_all_for_ref["Team"] == "C1"]
                 player_m = moto.copy()
 
-                cols_per_min = [c + "_per_min" for c in per_min_cols if c + "_per_min" in player_m.columns]
+                cols_per_min = [
+                    c + "_per_min" for c in per_min_cols if c + "_per_min" in player_m.columns
+                ]
 
                 if cols_per_min:
-                    player_stats = player_m[cols_per_min].mean().to_frame("Player_mean")
+                    player_stats = player_m[cols_per_min].mean().to_frame("Zawodnik_mean")
                     c1_stats = ref_c1[cols_per_min].mean().to_frame("C1_mean")
 
                     comp = player_stats.join(c1_stats, how="inner")
-                    comp["diff (Player - C1)"] = comp["Player_mean"] - comp["C1_mean"]
+                    comp["diff (Zawodnik - C1)"] = comp["Zawodnik_mean"] - comp["C1_mean"]
                     st.dataframe(comp.round(3), use_container_width=True)
 
-    # 2) INDEKS
+    # ------------------------------------------------------
+    # 2) ZAKŁADKA: INDEKS (PII)
+    # ------------------------------------------------------
     with tabs_prof[1]:
-        if moto.empty or "PII_vs_team_avg" not in moto.columns:
-            st.info("Brak danych indeksu intensywności lub PII_vs_team_avg.")
+        if moto.empty or "PlayerIntensityIndex" not in moto.columns:
+            st.info("Brak danych indeksu intensywności (PII) dla tego zawodnika.")
         else:
             st.markdown("### Player Intensity Index – przebieg i odniesienie do zespołu")
 
+            pii_plot_df = moto[["DateMid", "PlayerIntensityIndex", "PII_vs_team_avg"]].copy()
+
             chart_pii = (
-                alt.Chart(
-                    moto[["DateMid", "PlayerIntensityIndex", "PII_vs_team_avg"]]
-                    .dropna(subset=["DateMid"])
-                )
-                .transform_fold(
-                    ["PlayerIntensityIndex", "PII_vs_team_avg"],
-                    as_=["Metric", "Value"]
-                )
+                alt.Chart(pii_plot_df.melt(
+                    id_vars="DateMid",
+                    value_vars=["PlayerIntensityIndex", "PII_vs_team_avg"],
+                    var_name="Metric",
+                    value_name="Value",
+                ))
                 .mark_line(point=True)
                 .encode(
                     x=alt.X("DateMid:T", title="Data"),
@@ -1829,7 +1780,7 @@ elif page == "Profil zawodnika":
             )
             st.altair_chart(chart_pii, use_container_width=True)
 
-            st.markdown("### PII_vs_team_avg – najlepsze i najsłabsze okresy")
+            st.markdown("### PII_vs_team_avg – najlepsze i najsłabsze okresy (średnia z okresu)")
             if "RangeLabel" in moto.columns:
                 agg_pii = (
                     moto.groupby("RangeLabel")["PII_vs_team_avg"]
@@ -1837,6 +1788,7 @@ elif page == "Profil zawodnika":
                     .dropna()
                     .sort_values(ascending=False)
                 )
+
                 c1, c2 = st.columns(2)
                 if not agg_pii.empty:
                     c1.write("Top 5 okresów")
@@ -1844,29 +1796,35 @@ elif page == "Profil zawodnika":
                     c2.write("Bottom 5 okresów")
                     c2.dataframe(agg_pii.tail(5).to_frame("PII_vs_team_avg").round(3))
 
-    # 3) FANTASYPASY
+    # ------------------------------------------------------
+    # 3) ZAKŁADKA: FANTASYPASY
+    # ------------------------------------------------------
     with tabs_prof[2]:
         fant_metrics = [
             "PktOff", "PktDef", "Goal", "Assist", "ChanceAssist", "KeyPass",
             "KeyLoss", "DuelLossInBox", "MissBlockShot", "Finalization",
-            "KeyIndividualAction", "KeyRecover", "DuelWinInBox", "BlockShot"
+            "KeyIndividualAction", "KeyRecover", "DuelWinInBox", "BlockShot",
         ]
+
         if fant.empty:
-            st.info("Brak danych FANTASYPASY.")
+            st.info("Brak danych FANTASYPASY dla tego zawodnika.")
         else:
             st.markdown("### FANTASYPASY – przebieg metryk w czasie")
+
             pick_f = st.multiselect(
                 "Metryki",
                 fant_metrics,
                 default=["PktOff", "PktDef"],
-                key="prof_all_fant_metrics"
+                key="prof_all_fant_metrics",
             )
+
             if pick_f:
                 plot_f = (
                     fant[["DateMid"] + pick_f]
                     .melt(id_vars="DateMid", var_name="Metric", value_name="Value")
                     .dropna(subset=["Value"])
                 )
+
                 chart_f = (
                     alt.Chart(plot_f)
                     .mark_line(point=True)
@@ -1886,7 +1844,9 @@ elif page == "Profil zawodnika":
                 summary_f = fant[cols_num].mean().to_frame("mean_per_game").round(2)
                 st.dataframe(summary_f, use_container_width=True)
 
-    # 4) Tabele i eksport
+    # ------------------------------------------------------
+    # 4) ZAKŁADKA: Tabele i eksport
+    # ------------------------------------------------------
     with tabs_prof[3]:
         st.markdown("### Surowe dane – motoryka")
         if moto.empty:
@@ -1894,7 +1854,7 @@ elif page == "Profil zawodnika":
         else:
             st.dataframe(
                 moto.sort_values("DateMid", ascending=True),
-                use_container_width=True
+                use_container_width=True,
             )
 
         st.markdown("### Surowe dane – FANTASYPASY")
@@ -1903,7 +1863,7 @@ elif page == "Profil zawodnika":
         else:
             st.dataframe(
                 fant.sort_values("DateMid", ascending=True),
-                use_container_width=True
+                use_container_width=True,
             )
 
         if moto.empty and fant.empty:
@@ -1911,12 +1871,13 @@ elif page == "Profil zawodnika":
         else:
             excel_buffer = build_player_excel_report(p, moto, fant)
             st.download_button(
-                label="Pobierz profil zawodnika (EXCEL)",
+                label="📊 Pobierz profil zawodnika (EXCEL)",
                 data=excel_buffer,
                 file_name=f"profil_{p}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="prof_all_excel_download",
             )
+
 # ============================================================
 #                 SEKCJA: OVER / UNDER
 # ============================================================
