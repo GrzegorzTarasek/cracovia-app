@@ -79,11 +79,26 @@ def fetch_df(sql: str, params=None):
             return pd.DataFrame(columns=["Name"])
         return df[["Name"]].dropna().drop_duplicates().sort_values("Name")
 
-    # --- PLAYERS (NAME, TEAM, POSITION) ---
-    if "from players" in s and "team" in s:
-        df = load_players_table()
+    # ---- LISTA ZAWODNIKÓW Z TEAM & POSITION ----
+    # SELECT Name, Team, Position FROM players ORDER BY Name;
+    if "from players" in s and "select" in s and "team" in s:
+        df = load_players_table().copy()
+        # bierzemy tylko te kolumny, które faktycznie istnieją
         cols = [c for c in ["Name", "Team", "Position"] if c in df.columns]
-        return df[cols].dropna(subset=["Name"]).sort_values("Name")
+        if not cols:
+            # w ogóle nie ma znanych kolumn → zwróć pustą ramkę
+            return pd.DataFrame(columns=["Name", "Team", "Position"])
+
+        out = df[cols].copy()
+
+        # jeśli mamy kolumnę Name – filtrujemy po niej i sortujemy po Name
+        if "Name" in out.columns:
+            out = out.dropna(subset=["Name"]).sort_values("Name")
+        else:
+            # awaryjnie sortujemy po pierwszej dostępnej kolumnie
+            out = out.dropna().sort_values(cols[0])
+
+        return out
 
     # --- PERIODS ---
     if "from measurement_periods" in s:
