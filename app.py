@@ -54,6 +54,43 @@ def load_periods_table():
         TABLES["measurement_periods"] = _load_csv("measurement_periods.csv")
     return TABLES["measurement_periods"]
 
+@st.cache_data(show_spinner=False)
+def get_periods_df():
+    """
+    Zwraca DataFrame z okresami pomiarowymi:
+    kolumny: PeriodID, Label, DateStart, DateEnd
+    Posortowane malejąco po dacie startu.
+    """
+    try:
+        df = load_periods_table().copy()
+        if df.empty:
+            return pd.DataFrame(
+                columns=["PeriodID", "Label", "DateStart", "DateEnd"]
+            )
+
+        # konwersja dat
+        if "DateStart" in df.columns:
+            df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce")
+        if "DateEnd" in df.columns:
+            df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce")
+
+        cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
+
+        df = (
+            df[cols]
+            .dropna(subset=["DateStart", "DateEnd"])
+            .drop_duplicates()
+            .sort_values(["DateStart", "DateEnd"], ascending=[False, False])
+        )
+
+        return df
+
+    except Exception:
+        # w razie jakiegokolwiek błędu – pusta ramka w oczekiwanym formacie
+        return pd.DataFrame(
+            columns=["PeriodID", "Label", "DateStart", "DateEnd"]
+        )
+
 # ============================================================
 #                 POPRAWIONA FUNKCJA fetch_df
 # ============================================================
