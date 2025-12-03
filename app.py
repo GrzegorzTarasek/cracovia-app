@@ -57,37 +57,33 @@ def load_periods_table():
 @st.cache_data(show_spinner=False)
 def get_periods_df():
     """
-    Zwraca okresy pomiarowe measurement_periods
-    w formacie: PeriodID, Label, DateStart, DateEnd.
-    NIE korzysta z TABLES["periods"], więc nie wywala błędu.
+    Zwraca okresy pomiarowe measurement_periods w formacie:
+    Label, DateStart, DateEnd
+    (PeriodID jest opcjonalne – jeśli go nie ma w CSV, aplikacja i tak działa)
     """
-
     try:
-        # spróbuj użyć Twojego loadera CSV lub DB
         df = load_periods_table().copy()
     except Exception:
         df = pd.DataFrame()
 
-    # Jeśli brak danych – zwróć pustą tabelę z poprawnymi kolumnami
     if df is None or df.empty:
-        return pd.DataFrame(
-            columns=["PeriodID", "Label", "DateStart", "DateEnd"]
-        )
+        return pd.DataFrame(columns=["Label", "DateStart", "DateEnd"])
 
-    # Konwersja dat
+    # konwersja dat
     if "DateStart" in df.columns:
         df["DateStart"] = pd.to_datetime(df["DateStart"], errors="coerce").dt.date
     if "DateEnd" in df.columns:
         df["DateEnd"] = pd.to_datetime(df["DateEnd"], errors="coerce").dt.date
 
-    # Upewniamy się, że mamy właściwe kolumny
-    cols = [c for c in ["PeriodID", "Label", "DateStart", "DateEnd"] if c in df.columns]
-    df = df[cols].dropna(subset=["DateStart", "DateEnd"]).drop_duplicates()
+    # kolumny dostępne — bez wymuszania PeriodID!
+    expected = ["PeriodID", "Label", "DateStart", "DateEnd"]
+    cols = [c for c in expected if c in df.columns]
 
-    # Sortowanie jak wcześniej – najnowsze okresy na górze
+    df = df[cols].dropna(subset=["DateStart", "DateEnd"]).drop_duplicates()
     df = df.sort_values(["DateStart", "DateEnd"], ascending=[False, False])
 
     return df
+
 
 
 
