@@ -84,6 +84,50 @@ def get_periods_df():
 
     return df
 
+def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame):
+    """
+    Buduje raport EXCEL dla profilu zawodnika.
+    Zwraca bytes buffer gotowy do download_button.
+    """
+    import io
+    from pandas import ExcelWriter
+
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # Arkusz 1 – metryki MOTORYKA
+        if moto is not None and not moto.empty:
+            moto_sorted = moto.sort_values("DateMid", ascending=True)
+            moto_sorted.to_excel(writer, index=False, sheet_name="Motoryka")
+
+        # Arkusz 2 – FANTASYPASY
+        if fant is not None and not fant.empty:
+            fant_sorted = fant.sort_values("DateMid", ascending=True)
+            fant_sorted.to_excel(writer, index=False, sheet_name="FANTASYPASY")
+
+        # Arkusz 3 – Podsumowanie
+        summary_rows = []
+
+        if moto is not None and not moto.empty:
+            summary_rows.append({
+                "Kategoria": "Motoryka",
+                "Mecze": int(pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()),
+                "Minuty": int(pd.to_numeric(moto.get("Minutes"), errors="coerce").sum())
+            })
+
+        if fant is not None and not fant.empty:
+            summary_rows.append({
+                "Kategoria": "FANTASYPASY",
+                "Mecze": int(pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()),
+                "Minuty": int(pd.to_numeric(fant.get("Minutes"), errors="coerce").sum())
+            })
+
+        if summary_rows:
+            df_summary = pd.DataFrame(summary_rows)
+            df_summary.to_excel(writer, index=False, sheet_name="Podsumowanie")
+
+    output.seek(0)
+    return output
 
 
 
