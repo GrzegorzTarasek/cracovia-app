@@ -90,44 +90,64 @@ def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.Dat
     Zwraca bytes buffer gotowy do download_button.
     """
     import io
+    import numpy as np
     from pandas import ExcelWriter
+
+    def safe_int(x):
+        """Konwertuje sumę na int, traktując NaN jako 0."""
+        try:
+            if x is None or (isinstance(x, float) and np.isnan(x)):
+                return 0
+            return int(x)
+        except Exception:
+            return 0
 
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Arkusz 1 – metryki MOTORYKA
+        # ARKUSZ 1 – MOTORYKA
         if moto is not None and not moto.empty:
             moto_sorted = moto.sort_values("DateMid", ascending=True)
             moto_sorted.to_excel(writer, index=False, sheet_name="Motoryka")
 
-        # Arkusz 2 – FANTASYPASY
+        # ARKUSZ 2 – FANTASYPASY
         if fant is not None and not fant.empty:
             fant_sorted = fant.sort_values("DateMid", ascending=True)
             fant_sorted.to_excel(writer, index=False, sheet_name="FANTASYPASY")
 
-        # Arkusz 3 – Podsumowanie
+        # ARKUSZ 3 – PODSUMOWANIE
         summary_rows = []
 
+        # MOTORYKA - MECZE + MINUTY
         if moto is not None and not moto.empty:
+            mecze = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
+            minuty = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
+
             summary_rows.append({
                 "Kategoria": "Motoryka",
-                "Mecze": int(pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()),
-                "Minuty": int(pd.to_numeric(moto.get("Minutes"), errors="coerce").sum())
+                "Mecze": safe_int(mecze),
+                "Minuty": safe_int(minuty)
             })
 
+        # FANTASYPASY - MECZE + MINUTY
         if fant is not None and not fant.empty:
+            mecze = pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()
+            minuty = pd.to_numeric(fant.get("Minutes"), errors="coerce").sum()
+
             summary_rows.append({
                 "Kategoria": "FANTASYPASY",
-                "Mecze": int(pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()),
-                "Minuty": int(pd.to_numeric(fant.get("Minutes"), errors="coerce").sum())
+                "Mecze": safe_int(mecze),
+                "Minuty": safe_int(minuty)
             })
 
+        # Zapis do arkusza
         if summary_rows:
             df_summary = pd.DataFrame(summary_rows)
             df_summary.to_excel(writer, index=False, sheet_name="Podsumowanie")
 
     output.seek(0)
     return output
+
 
 
 
