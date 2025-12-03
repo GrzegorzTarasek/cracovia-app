@@ -1742,6 +1742,41 @@ if not plot_df.empty:
 else:
     st.info("Brak danych do wykonania wykresu.")
 
+# =====================================================================
+# B) HEATMAPA RÓŻNIC – zawodnik vs C1 (średnia i mediana)
+# =====================================================================
+st.markdown("### Heatmapa różnic zawodnik vs C1 (średnia & mediana)")
+
+heat_rows = []
+for col in cols_per_min:
+    player_mean = player_m[col].mean()
+    player_median = player_m[col].median()
+
+    c1_mean = ref_c1[col].mean()
+    c1_median = ref_c1[col].median()
+
+    heat_rows.append({
+        "Metryka": col.replace("_per_min", ""),
+        "Średnia": round(player_mean - c1_mean, 3),
+        "Mediana": round(player_median - c1_median, 3),
+    })
+
+heat_df = pd.DataFrame(heat_rows).set_index("Metryka")
+
+# heatmap kolorystyczna (zielony/ czerwony)
+def heat_color(val):
+    if pd.isna(val):
+        return ""
+    if val > 0:
+        return f"background-color: rgba(0, 200, 0, {min(abs(val)/5, 0.8)})"
+    else:
+        return f"background-color: rgba(200, 0, 0, {min(abs(val)/5, 0.8)})"
+
+st.dataframe(
+    heat_df.style.applymap(heat_color),
+    use_container_width=True
+)
+
 # ============================================================
 #                 SEKCJA: OVER / UNDER
 # ============================================================
