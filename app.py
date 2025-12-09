@@ -87,66 +87,462 @@ def get_periods_df():
 def build_player_excel_report(player_name: str, moto: pd.DataFrame, fant: pd.DataFrame):
     """
     Buduje raport EXCEL dla profilu zawodnika.
+
+    Arkusze:
+      1) Dane_surowe – MOTORYKA (u góry) i FANTASYPASY (pod spodem), osobne bloki
+         - motoryka: usunięte kolumny 1stTeam / PII_vs_team
+         - tylko wiersze, w których zawodnik grał (Minutes > 0 lub NumberOfGames > 0)
+      2) OverUnder – cztery widoki Over/Under dla zawodnika:
+         - Widok 1 – PII: zawodnik vs wszystkie zespoły (wszystkie okresy)
+         - Widok 2 – PII: zawodnik vs domyślny zespół (historia)
+         - Widok 3 – metryki per minuta: zawodnik vs mediana zespołu
+         - Widok 4 – przypisany zespół dla każdego okresu (mediana PII)
+      3) Podsumowanie – liczba pomiarów + mecze + minuty
+         - MOTORYKA: liczba pomiarów + minuty (meczów brak)
+         - FANTASYPASY: liczba pomiarów, mecze (NumberOfGames), minuty
+
     Zwraca bytes buffer gotowy do download_button.
     """
     import io
     import numpy as np
+    import pandas as pd
     from pandas import ExcelWriter
 
-    def safe_int(x):
-        """Konwertuje sumę na int, traktując NaN jako 0."""
+    # kolumny do usunięcia z motoryki
+    MOTO_DROP_COLS = [
+        "TD_km_1stTeam",
+        "HSR_1stTeam",
+        "Sprint_1stTeam",
+        "ACC_1stTeam",
+        "DECEL_1stTeam",
+        "PlayerIntensityIndexComparingToTeamAverage",
+    ]
+
+    def safe_int_from_series(s: pd.Series) -> int:
+        """Suma serii jako int, NaN → 0."""
+        if s is None:
+            return 0
+        val = pd.to_numeric(s, errors="coerce").sum()
         try:
-            if x is None or (isinstance(x, float) and np.isnan(x)):
-                return 0
-            return int(x)
+            return int(val) if pd.notna(val) else 0
         except Exception:
             return 0
 
+    def filter_played(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Zostawia tylko wiersze, w których zawodnik grał:
+        Minutes > 0 LUB NumberOfGames > 0 (warunek OR).
+        Działa również, gdy którejś kolumny nie ma.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.copy()
+
+        if "Minutes" in df.columns:
+            mins = pd.to_numeric(df["Minutes"], errors="coerce")
+        else:
+            mins = pd.Series(0, index=df.index, dtype="float")
+
+        if "NumberOfGames" in df.columns:
+            games = pd.to_numeric(df["NumberOfGames"], errors="coerce")
+        else:
+            games = pd.Series(0, index=df.index, dtype="float")
+
+        mins = mins.fillna(0)
+        games = games.fillna(0)
+
+        mask = (mins > 0) | (games > 0)
+        return df[mask]
+
     output = io.BytesIO()
 
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # ARKUSZ 1 – MOTORYKA
+    with ExcelWriter(output, engine="xlsxwriter") as writer:
+
+        # =======================================================
+        #  ARKUSZ 1: DANE_SUROWE – MOTORYKA NAD FANTASY
+        # =======================================================
+        sheet_raw = "Dane_surowe"
+        ws_raw = None
+        next_row = 0
+
+        moto_used = pd.DataFrame()
+        fant_used = pd.DataFrame()
+
+        # ---------- MOTORYKA ----------
         if moto is not None and not moto.empty:
-            moto_sorted = moto.sort_values("DateMid", ascending=True)
-            moto_sorted.to_excel(writer, index=False, sheet_name="Motoryka")
+            moto_used = filter_played(moto)
 
-        # ARKUSZ 2 – FANTASYPASY
+            if not moto_used.empty:
+                # usuwamy kolumny 1stTeam / PII_vs_team
+                existing_to_drop = [c for c in MOTO_DROP_COLS if c in moto_used.columns]
+                if existing_to_drop:
+                    moto_used = moto_used.drop(columns=existing_to_drop)
+
+                # sort wg DateMid jeśli jest
+                if "DateMid" in moto_used.columns:
+                    moto_used["DateMid"] = pd.to_datetime(moto_used["DateMid"], errors="coerce")
+                    moto_used = moto_used.sort_values("DateMid", ascending=True)
+
+                # nagłówek + tabela MOTORYKI
+                moto_used.to_excel(
+                    writer,
+                    sheet_name=sheet_raw,
+                    index=False,
+                    startrow=next_row + 1,
+                )
+                ws_raw = writer.sheets[sheet_raw]
+                ws_raw.write(next_row, 0, "MOTORYKA")
+                next_row = next_row + len(moto_used) + 3  # odstęp przed FANTASY
+
+        # ---------- FANTASYPASY ----------
         if fant is not None and not fant.empty:
-            fant_sorted = fant.sort_values("DateMid", ascending=True)
-            fant_sorted.to_excel(writer, index=False, sheet_name="FANTASYPASY")
+            fant_used = filter_played(fant)
 
-        # ARKUSZ 3 – PODSUMOWANIE
+            if not fant_used.empty:
+                if "DateMid" in fant_used.columns:
+                    fant_used["DateMid"] = pd.to_datetime(fant_used["DateMid"], errors="coerce")
+                    fant_used = fant_used.sort_values("DateMid", ascending=True)
+
+                # jeśli nie było motoryki, trzeba stworzyć arkusz
+                if ws_raw is None:
+                    fant_used.to_excel(
+                        writer,
+                        sheet_name=sheet_raw,
+                        index=False,
+                        startrow=next_row + 1,
+                    )
+                    ws_raw = writer.sheets[sheet_raw]
+                    ws_raw.write(next_row, 0, "FANTASYPASY")
+                    next_row = next_row + len(fant_used) + 3
+                else:
+                    fant_used.to_excel(
+                        writer,
+                        sheet_name=sheet_raw,
+                        index=False,
+                        startrow=next_row + 1,
+                    )
+                    ws_raw.write(next_row, 0, "FANTASYPASY")
+                    next_row = next_row + len(fant_used) + 3
+
+        # jeśli oba puste – stworzymy chociaż pusty arkusz
+        if ws_raw is None:
+            pd.DataFrame().to_excel(writer, sheet_name=sheet_raw, index=False)
+
+        # =======================================================
+        #  ARKUSZ 2: OVER / UNDER – 4 WIDOKI DLA ZAWODNIKA
+        # =======================================================
+        try:
+            df_all = load_motoryka_table().copy()
+        except Exception:
+            df_all = pd.DataFrame()
+
+        view1 = pd.DataFrame()
+        view2 = pd.DataFrame()
+        view3 = pd.DataFrame()
+        view4 = pd.DataFrame()  # przypisany zespół na każdy okres
+
+        if df_all is not None and not df_all.empty:
+            df = df_all.copy()
+            df["PlayerIntensityIndex"] = pd.to_numeric(
+                df.get("PlayerIntensityIndex"), errors="coerce"
+            )
+            df["Minutes"] = pd.to_numeric(df.get("Minutes"), errors="coerce").replace(0, np.nan)
+            df["DateStart"] = pd.to_datetime(df.get("DateStart"), errors="coerce").dt.date
+            df["DateEnd"] = pd.to_datetime(df.get("DateEnd"), errors="coerce").dt.date
+            df = df.dropna(subset=["Name", "Team", "DateStart", "DateEnd"])
+
+            # dane tylko dla tego zawodnika
+            df_player = df[df["Name"] == player_name].copy()
+
+            if not df_player.empty:
+                # ===================================================
+                # Widok 1: PII – zawodnik vs wszystkie zespoły (wszystkie okresy, mediany)
+                # ===================================================
+                player_period = (
+                    df_player.groupby(["DateStart", "DateEnd"])["PlayerIntensityIndex"]
+                    .median()
+                    .reset_index()
+                    .rename(columns={"PlayerIntensityIndex": "PII_player"})
+                )
+
+                team_period = (
+                    df.groupby(["Team", "DateStart", "DateEnd"])["PlayerIntensityIndex"]
+                    .median()
+                    .reset_index()
+                    .rename(columns={"PlayerIntensityIndex": "PII_team"})
+                )
+
+                view1 = player_period.merge(
+                    team_period,
+                    on=["DateStart", "DateEnd"],
+                    how="inner",
+                )
+
+                if not view1.empty:
+                    view1["diff_abs"] = view1["PII_player"] - view1["PII_team"]
+                    view1["diff_pct"] = (
+                        view1["PII_player"] / view1["PII_team"] - 1.0
+                    ) * 100.0
+                    view1["Okres"] = (
+                        view1["DateStart"].astype(str)
+                        + " → "
+                        + view1["DateEnd"].astype(str)
+                    )
+                    view1 = view1[
+                        ["Okres", "Team", "PII_player", "PII_team", "diff_abs", "diff_pct"]
+                    ].rename(columns={
+                        "Team": "Zespół",
+                        "PII_player": "PII zawodnika (mediana)",
+                        "PII_team": "Mediana PII zespołu",
+                        "Różnica bezwzględna": "Różnica bezwzględna",   # nazwa już ok
+                        "Różnica (%)": "Różnica (%)",                 # nazwa już ok
+                    })
+                    # powyżej zamieniliśmy nazwy ręcznie, więc poprawmy:
+                    view1 = view1.rename(columns={
+                        "diff_abs": "Różnica bezwzględna",
+                        "diff_pct": "Różnica (%)",
+                    })
+                    view1 = view1.sort_values(["Okres", "Zespół"])
+
+                # ===================================================
+                # Widok 2: PII – historia vs domyślny zespół (mediany)
+                # ===================================================
+                player_team = (
+                    df_player["Team"].dropna().mode().iloc[0]
+                    if not df_player["Team"].dropna().empty
+                    else None
+                )
+
+                if player_team and not view1.empty:
+                    view2 = view1[view1["Zespół"] == player_team].copy()
+                    view2 = view2.sort_values("Okres")
+
+                # ===================================================
+                # Widok 3: metryki per minuta – zawodnik vs mediana zespołu (mediany)
+                # ===================================================
+                per_min_cols = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
+
+                df2 = df.copy()
+                for c in per_min_cols:
+                    df2[c + "_per_min"] = (
+                        pd.to_numeric(df2.get(c), errors="coerce") / df2["Minutes"]
+                    ).replace([np.inf, -np.inf], np.nan)
+
+                metrics = [m + "_per_min" for m in per_min_cols]
+
+                pm = (
+                    df2.groupby(["Team", "Name"])[metrics]
+                    .median()
+                    .reset_index()
+                )
+
+                tm = (
+                    df2.groupby("Team")[metrics]
+                    .median()
+                    .reset_index()
+                    .rename(columns={m: m + "_team" for m in metrics})
+                )
+
+                merged_m = pm.merge(tm, on="Team", how="left")
+
+                rows_m = []
+                for _, r in merged_m[merged_m["Name"] == player_name].iterrows():
+                    for m in metrics:
+                        team_val = r.get(m + "_team")
+                        player_val = r.get(m)
+                        if pd.isna(team_val) or pd.isna(player_val) or team_val == 0:
+                            continue
+                        base_metric = m.replace("_per_min", "")
+                        rows_m.append({
+                            "Zespół": r["Team"],
+                            "Metryka": base_metric,
+                            "Mediana zawodnika (na min)": player_val,
+                            "Mediana zespołu (na min)": team_val,
+                            "Różnica bezwzględna": player_val - team_val,
+                            "Różnica (%)": (player_val / team_val - 1.0) * 100.0,
+                        })
+
+                if rows_m:
+                    view3 = pd.DataFrame(rows_m).sort_values(["Zespół", "Metryka"])
+
+                # ===================================================
+                # Widok 4: przypisany zespół dla każdego okresu (mediana PII)
+                # ===================================================
+                summary_rows = []
+
+                periods_all = (
+                    df_player[["DateStart", "DateEnd"]]
+                    .drop_duplicates()
+                    .sort_values(["DateStart", "DateEnd"])
+                )
+
+                for _, row_p in periods_all.iterrows():
+                    ds = row_p["DateStart"]
+                    de = row_p["DateEnd"]
+
+                    # dane zawodnika w tym okresie
+                    p_df = df_player[
+                        (df_player["DateStart"] == ds) &
+                        (df_player["DateEnd"] == de)
+                    ]
+                    if p_df.empty:
+                        continue
+
+                    p_median = p_df["PlayerIntensityIndex"].median()
+
+                    # dane wszystkich zespołów w tym okresie
+                    t_df = (
+                        df[
+                            (df["DateStart"] == ds) &
+                            (df["DateEnd"] == de)
+                        ]
+                        .groupby("Team")["PlayerIntensityIndex"]
+                        .median()
+                        .reset_index()
+                        .rename(columns={"PlayerIntensityIndex": "PII_team_median"})
+                    )
+
+                    if t_df.empty:
+                        continue
+
+                    t_df["PII_player_median"] = p_median
+                    t_df["diff_pct"] = (
+                        t_df["PII_player_median"] / t_df["PII_team_median"] - 1.0
+                    ) * 100.0
+                    t_df["diff_pct_abs"] = t_df["diff_pct"].abs()
+
+                    idx_best = t_df["diff_pct_abs"].idxmin()
+                    best = t_df.loc[idx_best]
+
+                    summary_rows.append({
+                        "Okres": f"{ds} → {de}",
+                        "Zespół najbliżej zawodnika": best["Team"],
+                        "Mediana PII zawodnika": p_median,
+                        "Mediana PII zespołu": best["PII_team_median"],
+                        "Różnica (%)": best["diff_pct"],
+                    })
+
+                if summary_rows:
+                    view4 = (
+                        pd.DataFrame(summary_rows)
+                        .sort_values("Okres")
+                        .round({
+                            "Mediana PII zawodnika": 3,
+                            "Mediana PII zespołu": 3,
+                            "Różnica (%)": 1,
+                        })
+                    )
+
+        # zapis arkusza OverUnder
+        if (view1 is not None and not view1.empty) or \
+           (view2 is not None and not view2.empty) or \
+           (view3 is not None and not view3.empty) or \
+           (view4 is not None and not view4.empty):
+
+            start_row = 0
+            sheet_ou = "OverUnder"
+            ws_ou = None
+
+            if view1 is not None and not view1.empty:
+                view1.to_excel(
+                    writer,
+                    sheet_name=sheet_ou,
+                    index=False,
+                    startrow=start_row + 1,
+                )
+                ws_ou = writer.sheets[sheet_ou]
+                ws_ou.write(start_row, 0, "Widok 1 – PII: zawodnik vs wszystkie zespoły (wszystkie okresy, mediany)")
+                start_row += len(view1) + 3
+
+            if view2 is not None and not view2.empty:
+                if ws_ou is None:
+                    view2.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                    ws_ou = writer.sheets[sheet_ou]
+                else:
+                    view2.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                ws_ou.write(start_row, 0, "Widok 2 – PII: zawodnik vs domyślny zespół (historia, mediany)")
+                start_row += len(view2) + 3
+
+            if view3 is not None and not view3.empty:
+                if ws_ou is None:
+                    view3.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                    ws_ou = writer.sheets[sheet_ou]
+                else:
+                    view3.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                ws_ou.write(start_row, 0, "Widok 3 – metryki per minuta: zawodnik vs mediana zespołu (mediany)")
+                start_row += len(view3) + 3
+
+            if view4 is not None and not view4.empty:
+                if ws_ou is None:
+                    view4.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                    ws_ou = writer.sheets[sheet_ou]
+                else:
+                    view4.to_excel(
+                        writer,
+                        sheet_name=sheet_ou,
+                        index=False,
+                        startrow=start_row + 1,
+                    )
+                ws_ou.write(start_row, 0, "Widok 4 – przypisany zespół dla każdego okresu (mediana PII)")
+
+        # =======================================================
+        #  ARKUSZ 3: PODSUMOWANIE POMIARÓW / MECZÓW
+        # =======================================================
         summary_rows = []
 
-        # MOTORYKA - MECZE + MINUTY
-        if moto is not None and not moto.empty:
-            mecze = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
-            minuty = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
-
+        if moto_used is not None and not moto_used.empty:
             summary_rows.append({
                 "Kategoria": "Motoryka",
-                "Mecze": safe_int(mecze),
-                "Minuty": safe_int(minuty)
+                "Liczba pomiarów": len(moto_used),
+                "Mecze": np.nan,  # brak meczów w motoryce
+                "Minuty": safe_int_from_series(moto_used.get("Minutes")),
             })
 
-        # FANTASYPASY - MECZE + MINUTY
-        if fant is not None and not fant.empty:
-            mecze = pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()
-            minuty = pd.to_numeric(fant.get("Minutes"), errors="coerce").sum()
-
+        if fant_used is not None and not fant_used.empty:
             summary_rows.append({
                 "Kategoria": "FANTASYPASY",
-                "Mecze": safe_int(mecze),
-                "Minuty": safe_int(minuty)
+                "Liczba pomiarów": len(fant_used),
+                "Mecze": safe_int_from_series(fant_used.get("NumberOfGames")),
+                "Minuty": safe_int_from_series(fant_used.get("Minutes")),
             })
 
-        # Zapis do arkusza
         if summary_rows:
             df_summary = pd.DataFrame(summary_rows)
             df_summary.to_excel(writer, index=False, sheet_name="Podsumowanie")
 
     output.seek(0)
     return output
+
+
+
+
+
 
 
 
@@ -344,7 +740,7 @@ with st.sidebar:
 
     sekcja = st.radio(
         "Sekcja",
-        ["Analiza", "Profil zawodnika", "Over/Under"],
+        ["Analiza", "Profil zawodnika", "Over/Under", "Powtarzalne Over/Under"],
         key="nav_section",
     )
 
@@ -362,8 +758,11 @@ with st.sidebar:
         )
     elif sekcja == "Over/Under":
         page = "Over/Under"
+    elif sekcja == "Powtarzalne Over/Under":
+        page = "Powtarzalne Over/Under"
     else:
         page = "Profil zawodnika"
+
 
 
 st.title("Cracovia – rejestry i analizy")
@@ -1634,6 +2033,10 @@ elif page == "Profil zawodnika":
         moto = moto.copy()
         moto["Minutes"] = pd.to_numeric(moto.get("Minutes"), errors="coerce").replace(0, np.nan)
 
+        # daty jako date (żeby ładnie merge'ować po DateStart/DateEnd)
+        moto["DateStart"] = pd.to_datetime(moto["DateStart"], errors="coerce").dt.date
+        moto["DateEnd"] = pd.to_datetime(moto["DateEnd"], errors="coerce").dt.date
+
         for m in per_min_cols:
             if m in moto.columns:
                 moto[m + "_per_min"] = pd.to_numeric(moto[m], errors="coerce") / moto["Minutes"]
@@ -1652,6 +2055,10 @@ elif page == "Profil zawodnika":
         )
 
         if not periods.empty:
+            periods = periods.copy()
+            periods["DateStart"] = pd.to_datetime(periods["DateStart"], errors="coerce").dt.date
+            periods["DateEnd"] = pd.to_datetime(periods["DateEnd"], errors="coerce").dt.date
+
             moto = moto.merge(
                 periods,
                 on=["DateStart", "DateEnd"],
@@ -1668,16 +2075,15 @@ elif page == "Profil zawodnika":
             errors="coerce"
         )
 
-        try:
-            all_m = load_motoryka_all(None, None, None)
-        except Exception:
-            all_m = pd.DataFrame()
-
-        if all_m is not None and not all_m.empty and "PlayerIntensityIndex" in all_m.columns:
+        # globalne średnie PII zespołów po okresach – z całego CSV
+        all_m = load_motoryka_table().copy()
+        if not all_m.empty and "PlayerIntensityIndex" in all_m.columns:
             all_m = all_m.copy()
             all_m["PlayerIntensityIndex"] = pd.to_numeric(
                 all_m["PlayerIntensityIndex"], errors="coerce"
             )
+            all_m["DateStart"] = pd.to_datetime(all_m["DateStart"], errors="coerce").dt.date
+            all_m["DateEnd"] = pd.to_datetime(all_m["DateEnd"], errors="coerce").dt.date
 
             team_mean = (
                 all_m.groupby(["Team", "DateStart", "DateEnd"], as_index=False)["PlayerIntensityIndex"]
@@ -1699,24 +2105,24 @@ elif page == "Profil zawodnika":
     if not fant.empty:
         fant = fant.copy()
         fant["Minutes"] = pd.to_numeric(fant.get("Minutes"), errors="coerce")
-        mid_f = pd.to_datetime(fant["DateStart"]) + (
-            pd.to_datetime(fant["DateEnd"]) - pd.to_datetime(fant["DateStart"])
-        ) / 2
+        fant["DateStart"] = pd.to_datetime(fant["DateStart"], errors="coerce")
+        fant["DateEnd"] = pd.to_datetime(fant["DateEnd"], errors="coerce")
+        mid_f = fant["DateStart"] + (fant["DateEnd"] - fant["DateStart"]) / 2
         fant["DateMid"] = mid_f.dt.date
 
     # krótkie podsumowanie liczby meczów/minut
     if not moto.empty:
-        mecze_m = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
-        min_m = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
-        mecze_m = int(mecze_m) if pd.notna(mecze_m) else 0
-        min_m = int(min_m) if pd.notna(min_m) else 0
+        mecze_m_raw = pd.to_numeric(moto.get("NumberOfGames"), errors="coerce").sum()
+        min_m_raw = pd.to_numeric(moto.get("Minutes"), errors="coerce").sum()
+        mecze_m = int(mecze_m_raw) if pd.notna(mecze_m_raw) else 0
+        min_m = int(min_m_raw) if pd.notna(min_m_raw) else 0
         st.caption(f"MOTORYKA: mecze = {mecze_m}, minuty = {min_m}")
 
     if not fant.empty:
-        mecze_f = pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()
-        min_f = pd.to_numeric(fant.get("Minutes"), errors="coerce").sum()
-        mecze_f = int(mecze_f) if pd.notna(mecze_f) else 0
-        min_f = int(min_f) if pd.notna(min_f) else 0
+        mecze_f_raw = pd.to_numeric(fant.get("NumberOfGames"), errors="coerce").sum()
+        min_f_raw = pd.to_numeric(fant.get("Minutes"), errors="coerce").sum()
+        mecze_f = int(mecze_f_raw) if pd.notna(mecze_f_raw) else 0
+        min_f = int(min_f_raw) if pd.notna(min_f_raw) else 0
         st.caption(f"FANTASYPASY: mecze = {mecze_f}, minuty = {min_f}")
 
     tabs_prof = st.tabs(["Motoryka", "Indeks", "FANTASYPASY", "Tabele i eksport"])
@@ -1756,24 +2162,62 @@ elif page == "Profil zawodnika":
 
                 st.altair_chart(chart_m, use_container_width=True)
 
+            # --- PODSUMOWANIE METRYK NA ZAKRES POMIARU (GLOBALNE) ---
             st.markdown("### Podsumowanie metryk na zakres pomiaru")
-            if "RangeLabel" in moto.columns:
-                agg_cols = [c for c in moto.columns if c.endswith("_per_min")]
+
+            all_m = load_motoryka_table().copy()
+            if all_m.empty:
+                st.info("Brak globalnych danych motorycznych.")
+            else:
+                all_m["Minutes"] = pd.to_numeric(all_m["Minutes"], errors="coerce").replace(0, np.nan)
+
+                for m in per_min_cols:
+                    if m in all_m.columns:
+                        all_m[m + "_per_min"] = (
+                            pd.to_numeric(all_m[m], errors="coerce") / all_m["Minutes"]
+                        )
+
+                all_m["DateStart"] = pd.to_datetime(all_m["DateStart"], errors="coerce").dt.date
+                all_m["DateEnd"] = pd.to_datetime(all_m["DateEnd"], errors="coerce").dt.date
+
+                periods2 = get_periods_df().copy()
+                if not periods2.empty:
+                    periods2["DateStart"] = pd.to_datetime(
+                        periods2["DateStart"], errors="coerce"
+                    ).dt.date
+                    periods2["DateEnd"] = pd.to_datetime(
+                        periods2["DateEnd"], errors="coerce"
+                    ).dt.date
+
+                    all_m = all_m.merge(
+                        periods2[["DateStart", "DateEnd", "Label"]],
+                        on=["DateStart", "DateEnd"],
+                        how="left",
+                    )
+
+                    all_m["RangeLabel"] = all_m["Label"].fillna(
+                        all_m["DateStart"].astype(str) + " → " + all_m["DateEnd"].astype(str)
+                    )
+                else:
+                    all_m["RangeLabel"] = (
+                        all_m["DateStart"].astype(str) + " → " + all_m["DateEnd"].astype(str)
+                    )
+
+                agg_cols = [c for c in all_m.columns if c.endswith("_per_min")]
+
                 if agg_cols:
-                    summary = (
-                        moto.groupby("RangeLabel")[agg_cols]
+                    summary_global = (
+                        all_m.groupby("RangeLabel")[agg_cols]
                         .agg(["mean", "median"])
                         .round(2)
                     )
-                    st.dataframe(summary, use_container_width=True)
+                    st.dataframe(summary_global, use_container_width=True)
 
             st.markdown("---")
             st.subheader("Zawodnik vs C1 – per minuta (globalnie)")
 
-            try:
-                df_all_for_ref = load_motoryka_all(None, None, None).copy()
-            except Exception:
-                df_all_for_ref = pd.DataFrame()
+            # referencja C1 liczona z całej tabeli motorycznej
+            df_all_for_ref = load_motoryka_table().copy()
 
             if df_all_for_ref.empty or df_all_for_ref[df_all_for_ref["Team"] == "C1"].empty:
                 st.info("Brak danych referencyjnych C1.")
@@ -1837,8 +2281,10 @@ elif page == "Profil zawodnika":
                     .dropna()
                     .sort_values(ascending=False)
                 )
-                c1, c2 = st.columns(2)
-                if not agg_pii.empty:
+                if agg_pii.empty:
+                    st.info("Brak danych do wyznaczenia najlepszych/najsłabszych okresów.")
+                else:
+                    c1, c2 = st.columns(2)
                     c1.write("Top 5 okresów")
                     c1.dataframe(agg_pii.head(5).to_frame("PII_vs_team_avg").round(3))
                     c2.write("Bottom 5 okresów")
@@ -1917,6 +2363,7 @@ elif page == "Profil zawodnika":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="prof_all_excel_download",
             )
+
 # ============================================================
 #                 SEKCJA: OVER / UNDER
 # ============================================================
@@ -2540,5 +2987,248 @@ elif sekcja == "Over/Under":
             use_container_width=True,
         )
 
+
+# ============================================================
+#           SEKCJA: POWTARZALNE OVER / UNDER
+# ============================================================
+elif sekcja == "Powtarzalne Over/Under":
+    st.title("Powtarzalne Over/Under – analiza stabilności zawodników")
+
+    # ===== 1) Pobranie danych motorycznych =====
+    try:
+        df = load_motoryka_table()
+    except Exception:
+        df = pd.DataFrame()
+
+    if df is None or df.empty:
+        st.info("Brak danych motorycznych.")
+        st.stop()
+
+    df = df.copy()
+    df["PlayerIntensityIndex"] = pd.to_numeric(df.get("PlayerIntensityIndex"), errors="coerce")
+    df["Minutes"] = pd.to_numeric(df.get("Minutes"), errors="coerce").replace(0, np.nan)
+    df["DateStart"] = pd.to_datetime(df.get("DateStart"), errors="coerce").dt.date
+    df["DateEnd"] = pd.to_datetime(df.get("DateEnd"), errors="coerce").dt.date
+    df = df.dropna(subset=["Name", "Team", "PlayerIntensityIndex", "DateStart", "DateEnd"])
+
+    # ==================================================================
+    # MEDIANY PII w okresach: zawodnik vs zespół
+    # ==================================================================
+    player_period = (
+        df.groupby(["Name", "Team", "DateStart", "DateEnd"], as_index=False)["PlayerIntensityIndex"]
+        .median()
+        .rename(columns={"PlayerIntensityIndex": "PII_player"})
+    )
+
+    team_period = (
+        df.groupby(["Team", "DateStart", "DateEnd"], as_index=False)["PlayerIntensityIndex"]
+        .median()
+        .rename(columns={"PlayerIntensityIndex": "PII_team"})
+    )
+
+    merged = player_period.merge(
+        team_period,
+        on=["Team", "DateStart", "DateEnd"],
+        how="left",
+    ).dropna(subset=["PII_player", "PII_team"])
+
+    if merged.empty:
+        st.info("Brak danych PII per okres.")
+        st.stop()
+
+    merged["diff_abs"] = merged["PII_player"] - merged["PII_team"]
+    merged["diff_pct"] = (merged["PII_player"] / merged["PII_team"] - 1.0) * 100
+    merged["Okres"] = merged["DateStart"].astype(str) + " → " + merged["DateEnd"].astype(str)
+
+    # ==================================================================
+    # WYBÓR WIDOKU
+    # ==================================================================
+    view_mode = st.radio(
+        "Widok",
+        ["Powtarzalni w okresie", "Ranking powtarzalności"],
+        horizontal=True,
+        key="rep_view_mode",
+    )
+
+    # ==================================================================
+    #     WIDOK 1 – POWTARZALNI W OKRESIE
+    # ==================================================================
+    if view_mode == "Powtarzalni w okresie":
+
+        # dostępne okresy
+        periods_all = (
+            merged[["DateStart", "DateEnd"]]
+            .drop_duplicates()
+            .sort_values(["DateStart", "DateEnd"])
+        )
+        periods_all["Label"] = periods_all["DateStart"].astype(str) + " → " + periods_all["DateEnd"].astype(str)
+
+        okres_sel = st.selectbox(
+            "Okres referencyjny",
+            periods_all["Label"].tolist(),
+            key="rep_period_select",
+        )
+
+        row_sel = periods_all[periods_all["Label"] == okres_sel].iloc[0]
+        ds = row_sel["DateStart"]
+        de = row_sel["DateEnd"]
+
+        st.caption(f"Wybrany okres: {ds} → {de}")
+
+        threshold = st.slider(
+            "Próg (%) Over/Under (vs mediana zespołu)",
+            min_value=0.0,
+            max_value=50.0,
+            value=5.0,
+            step=1.0,
+            key="rep_threshold",
+        )
+
+        sel_df = merged[
+            (merged["DateStart"] == ds) &
+            (merged["DateEnd"] == de)
+        ].copy()
+
+        if sel_df.empty:
+            st.info("Brak danych w wybranym okresie.")
+            st.stop()
+
+        # wyliczenia
+        over_df = sel_df[sel_df["diff_pct"] >= threshold].copy()
+        under_df = sel_df[sel_df["diff_pct"] <= -threshold].copy()
+
+        c1, c2 = st.columns(2)
+
+        # ------------------ OVER ------------------
+        with c1:
+            st.markdown("## Powtarzalni OVER")
+            st.caption(
+                "Zawodnicy, których mediana PII w tym okresie jest wyższa niż mediana PII zespołu "
+                "o co najmniej zadany próg."
+            )
+
+            if over_df.empty:
+                st.info("Brak zawodników Over w tym okresie.")
+            else:
+                st.dataframe(
+                    over_df[["Team", "Name"]]
+                    .sort_values(["Team", "Name"])
+                    .rename(columns={"Team": "Zespół", "Name": "Zawodnik"}),
+                    use_container_width=True,
+                )
+
+        # ------------------ UNDER ------------------
+        with c2:
+            st.markdown("## Powtarzalni UNDER")
+            st.caption(
+                "Zawodnicy, których mediana PII w tym okresie jest niższa niż mediana PII zespołu "
+                "o co najmniej zadany próg."
+            )
+
+            if under_df.empty:
+                st.info("Brak zawodników Under w tym okresie.")
+            else:
+                st.dataframe(
+                    under_df[["Team", "Name"]]
+                    .sort_values(["Team", "Name"])
+                    .rename(columns={"Team": "Zespół", "Name": "Zawodnik"}),
+                    use_container_width=True,
+                )
+
+    # ==================================================================
+    #     WIDOK 2 – RANKING POWTARZALNOŚCI (CAŁA HISTORIA)
+    # ==================================================================
+    else:
+        st.subheader("Ranking powtarzalności Over/Under – cała historia (vs mediana zespołu)")
+
+        threshold_rank = st.slider(
+            "Próg (%) Over/Under (vs mediana zespołu)",
+            min_value=0.0,
+            max_value=50.0,
+            value=5.0,
+            step=1.0,
+            key="rep_rank_threshold",
+        )
+
+        merged_rank = merged.copy()
+        merged_rank["flag_over"] = merged_rank["diff_pct"] >= threshold_rank
+        merged_rank["flag_under"] = merged_rank["diff_pct"] <= -threshold_rank
+
+        # agregacja po zawodnikach
+        agg_rank = (
+            merged_rank
+            .groupby(["Team", "Name"], as_index=False)
+            .agg(
+                Over=("flag_over", "sum"),
+                Under=("flag_under", "sum"),
+                Periods=("Okres", "nunique"),
+            )
+        )
+
+        # zawodnicy, którzy mieli choć 1 Over albo 1 Under
+        agg_rank = agg_rank[(agg_rank["Over"] > 0) | (agg_rank["Under"] > 0)]
+
+        if agg_rank.empty:
+            st.info("Brak zawodników z historii Over/Under.")
+            st.stop()
+
+        min_rep = st.slider(
+            "Minimalna liczba powtórzeń Over/Under",
+            min_value=1,
+            max_value=int(agg_rank[["Over", "Under"]].values.max()),
+            value=2,
+            step=1,
+            key="rep_min_rep",
+        )
+
+        agg_rank_f = agg_rank[
+            (agg_rank["Over"] >= min_rep) | (agg_rank["Under"] >= min_rep)
+        ]
+
+        if agg_rank_f.empty:
+            st.info("Brak zawodników spełniających minimalne kryterium powtórzeń.")
+            st.stop()
+
+        c1, c2 = st.columns(2)
+
+        # ------------------ OVER ranking ------------------
+        with c1:
+            st.markdown("### Najczęściej OVER")
+            df_over = agg_rank_f.sort_values(["Over", "Under"], ascending=[False, False])
+            st.dataframe(
+                df_over.rename(columns={
+                    "Team": "Zespół",
+                    "Name": "Zawodnik",
+                    "Over": "Liczba Over",
+                    "Under": "Liczba Under",
+                    "Periods": "Okresy pomiarowe",
+                }),
+                use_container_width=True,
+            )
+
+        # ------------------ UNDER ranking ------------------
+        with c2:
+            st.markdown("### Najczęściej UNDER")
+            df_under = agg_rank_f.sort_values(["Under", "Over"], ascending=[False, False])
+            st.dataframe(
+                df_under.rename(columns={
+                    "Team": "Zespół",
+                    "Name": "Zawodnik",
+                    "Under": "Liczba Under",
+                    "Over": "Liczba Over",
+                    "Periods": "Okresy pomiarowe",
+                }),
+                use_container_width=True,
+            )
+
+        st.markdown(
+            """
+**Interpretacja rankingu:**
+
+- Każdy Over/Under oznacza okres, w którym zawodnik był istotnie powyżej lub poniżej mediany zespołu.  
+- Ranking pokazuje, którzy zawodnicy **regularnie przekraczają medianę zespołu (Over)**,  
+  a którzy częściej są **poniżej typowego poziomu drużyny (Under)**.  
+"""
+        )
 
 
