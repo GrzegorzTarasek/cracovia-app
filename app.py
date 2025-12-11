@@ -1536,31 +1536,23 @@ elif page == "Indeks – porównania":
     df["DateMid"] = (df["DateStart"] + (df["DateEnd"] - df["DateStart"]) / 2).dt.date
 
     # ============================================================
-    #             PII vs średnia zespołu
+    #      PII vs MEDIANA ZESPOŁU (per zespół i okres)
     # ============================================================
-    if "PlayerIntensityIndexComparingToTeamAverage" in df.columns:
-        if df["PlayerIntensityIndexComparingToTeamAverage"].notna().any():
-            df["PII_vs_team_avg"] = pd.to_numeric(
-                df["PlayerIntensityIndexComparingToTeamAverage"],
-                errors="coerce"
-            )
-        else:
-            df["PII_vs_team_avg"] = np.nan
-    else:
-        # własne liczenie
-        team_mean = (
-            df.groupby(["Team", "DateStart", "DateEnd"])["PlayerIntensityIndex"]
-            .mean()
-            .rename("team_avg")
-        )
+    team_median = (
+        df.groupby(["Team", "DateStart", "DateEnd"])["PlayerIntensityIndex"]
+        .median()
+        .rename("team_PII_median")
+        .reset_index()
+    )
 
-        df = df.merge(
-            team_mean,
-            on=["Team", "DateStart", "DateEnd"],
-            how="left"
-        )
+    df = df.merge(
+        team_median,
+        on=["Team", "DateStart", "DateEnd"],
+        how="left"
+    )
 
-        df["PII_vs_team_avg"] = df["PlayerIntensityIndex"] - df["team_avg"]
+    # używamy dalej tej kolumny – ale to już jest RÓŻNICA do MEDIANY
+    df["PII_vs_team_avg"] = df["PlayerIntensityIndex"] - df["team_PII_median"]
 
     # ============================================================
     #          TRYB ANALIZY
@@ -1594,7 +1586,7 @@ elif page == "Indeks – porównania":
             "Team": "Zespół",
             "DateMid": "Data",
             "PlayerIntensityIndex": "Indeks PII",
-            "PII_vs_team_avg": "Różnica PII vs średnia zespołu",
+            "PII_vs_team_avg": "Różnica PII vs mediana zespołu",
         })
 
         st.dataframe(view_disp, use_container_width=True)
@@ -1630,7 +1622,7 @@ elif page == "Indeks – porównania":
             "Team": "Zespół",
             "DateMid": "Data",
             "PlayerIntensityIndex": "Indeks PII",
-            "PII_vs_team_avg": "Różnica PII vs średnia zespołu",
+            "PII_vs_team_avg": "Różnica PII vs mediana zespołu",
         })
 
         st.dataframe(view_disp, use_container_width=True)
@@ -1678,7 +1670,7 @@ elif page == "Indeks – porównania":
             "Team": "Zespół",
             "DateMid": "Data",
             "PlayerIntensityIndex": "Indeks PII",
-            "PII_vs_team_avg": "Różnica PII vs średnia zespołu",
+            "PII_vs_team_avg": "Różnica PII vs mediana zespołu",
         })
 
         st.dataframe(view_disp, use_container_width=True)
@@ -1730,6 +1722,12 @@ elif page == "Indeks – porównania":
             key="idx_cmp_metric"
         )
 
+        metric_label = (
+            "Indeks PII"
+            if metric == "PlayerIntensityIndex"
+            else "Różnica PII vs mediana zespołu"
+        )
+
         plot_data = subset[["Name", "Team", "DateMid", metric]].copy()
         plot_data = plot_data.rename(columns={metric: "Value"}).dropna(subset=["Value"])
 
@@ -1738,7 +1736,7 @@ elif page == "Indeks – porównania":
             .mark_line(point=True)
             .encode(
                 x=alt.X("DateMid:T", title="Data"),
-                y=alt.Y("Value:Q", title=metric),
+                y=alt.Y("Value:Q", title=metric_label),
                 color=alt.Color("Name:N", title="Zawodnik"),
                 tooltip=["DateMid:T", "Name:N", "Team:N", "Value:Q"],
             )
@@ -1756,10 +1754,11 @@ elif page == "Indeks – porównania":
         table_disp = table.rename(columns={
             "Name": "Zawodnik",
             "PlayerIntensityIndex": "Indeks PII",
-            "PII_vs_team_avg": "Różnica PII vs średnia zespołu",
+            "PII_vs_team_avg": "Różnica PII vs mediana zespołu",
         })
 
         st.dataframe(table_disp, use_container_width=True)
+
 # ============================================================
 #                 STRONA: PROFIL ZAWODNIKA
 # ============================================================
