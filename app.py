@@ -3276,7 +3276,7 @@ elif page == "Powtarzalne Over/Under":
                     "Over": "Liczba Over",
                     "Under": "Liczba Under",
                     "Total": "Over+Under",
-                    "Periods": "Okresy (mianownik)",
+                    "Periods": "Ilość spotkań",
                     "Over_rate": "Over / Periods",
                     "Under_rate": "Under / Periods",
                     "Minutes_total": "Suma minut (historia)",
