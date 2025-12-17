@@ -2371,8 +2371,8 @@ elif page == "Over/Under":
     # ==================================================================
     tab_global_pii, tab_metrics, tab_periods = st.tabs([
         "Globalne Over/Under (PII – B+C)",
-        "Metryki per minuta (B+C)",
-        "Okresy pomiarowe PII (B+C)",
+        "Metryki per minuta ",
+        "Okresy pomiarowe PII ",
     ])
 
     # ==================================================================
@@ -2401,7 +2401,7 @@ elif page == "Over/Under":
         # --------------------------------------------------------------
         # Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły
         # --------------------------------------------------------------
-        st.markdown("### Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły (B+C)")
+        st.markdown("### Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły ")
 
         periods = (
             player_pii_all[["DateStart", "DateEnd"]]
@@ -2528,9 +2528,9 @@ elif page == "Over/Under":
         )
 
         # --------------------------------------------------------------
-        # Widok 2 – historia: zawodnik vs wybrany zespół (B+C)
+        # Widok 2 – historia: zawodnik vs wybrany zespół 
         # --------------------------------------------------------------
-        st.markdown("### Widok 2 – wszystkie okresy: zawodnik vs wybrany zespół (B+C)")
+        st.markdown("### Widok 2 – wszystkie okresy: zawodnik vs wybrany zespół ")
 
         team_options = sorted(pii_df["Team"].dropna().unique().tolist())
         compare_team = st.selectbox("Zespół referencyjny", team_options, key="ou_bc_hist_team")
@@ -2632,9 +2632,9 @@ elif page == "Over/Under":
                 )
 
         # --------------------------------------------------------------
-        # Widok 3 – przypisany zespół dla każdego okresu (B+C)
+        # Widok 3 – przypisany zespół dla każdego okresu 
         # --------------------------------------------------------------
-        st.markdown("### Widok 3 – przypisany zespół dla każdego okresu (B+C)")
+        st.markdown("### Widok 3 – przypisany zespół dla każdego okresu ")
 
         summary_rows = []
         periods_all = (
@@ -3190,7 +3190,7 @@ elif page == "Powtarzalne Over/Under":
     #     WIDOK 2 – RANKING POWTARZALNOŚCI (CAŁA HISTORIA)
     # ==================================================================
     else:
-        st.subheader("Ranking powtarzalności Over/Under – cała historia (B+C)")
+        st.subheader("Ranking powtarzalności Over/Under – cała historia ")
 
         threshold_rank = st.slider(
             "Próg (%) Over/Under",
@@ -3312,7 +3312,7 @@ elif page == "Powtarzalne Over/Under":
             """
 **Interpretacja rankingu:**
 
-- Każdy Over/Under oznacza okres, w którym zawodnik był istotnie powyżej lub poniżej baseline zespołu, po korekcie minutami (B+C).  
+- Każdy Over/Under oznacza okres, w którym zawodnik był istotnie powyżej lub poniżej baseline zespołu, po korekcie minutami .  
 - Ranking pokazuje, którzy zawodnicy **regularnie** przekraczają baseline (Over) lub częściej są poniżej (Under).  
 """
         )
