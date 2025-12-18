@@ -2371,8 +2371,8 @@ elif page == "Over/Under":
     # ==================================================================
     tab_global_pii, tab_metrics, tab_periods = st.tabs([
         "Globalne Over/Under (PII – B+C)",
-        "Metryki per minuta ",
-        "Okresy pomiarowe PII ",
+        "Metryki per minuta (B+C)",
+        "Okresy pomiarowe PII (B+C)",
     ])
 
     # ==================================================================
@@ -2401,7 +2401,7 @@ elif page == "Over/Under":
         # --------------------------------------------------------------
         # Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły
         # --------------------------------------------------------------
-        st.markdown("### Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły ")
+        st.markdown("### Widok 1 – wybrany okres: zawodnik vs wszystkie zespoły (B+C)")
 
         periods = (
             player_pii_all[["DateStart", "DateEnd"]]
@@ -2528,9 +2528,9 @@ elif page == "Over/Under":
         )
 
         # --------------------------------------------------------------
-        # Widok 2 – historia: zawodnik vs wybrany zespół 
+        # Widok 2 – historia: zawodnik vs wybrany zespół (B+C)
         # --------------------------------------------------------------
-        st.markdown("### Widok 2 – wszystkie okresy: zawodnik vs wybrany zespół ")
+        st.markdown("### Widok 2 – wszystkie okresy: zawodnik vs wybrany zespół (B+C)")
 
         team_options = sorted(pii_df["Team"].dropna().unique().tolist())
         compare_team = st.selectbox("Zespół referencyjny", team_options, key="ou_bc_hist_team")
@@ -2632,9 +2632,9 @@ elif page == "Over/Under":
                 )
 
         # --------------------------------------------------------------
-        # Widok 3 – przypisany zespół dla każdego okresu 
+        # Widok 3 – przypisany zespół dla każdego okresu (B+C)
         # --------------------------------------------------------------
-        st.markdown("### Widok 3 – przypisany zespół dla każdego okresu ")
+        st.markdown("### Widok 3 – przypisany zespół dla każdego okresu (B+C)")
 
         summary_rows = []
         periods_all = (
@@ -3190,7 +3190,7 @@ elif page == "Powtarzalne Over/Under":
     #     WIDOK 2 – RANKING POWTARZALNOŚCI (CAŁA HISTORIA)
     # ==================================================================
     else:
-        st.subheader("Ranking powtarzalności Over/Under – cała historia ")
+        st.subheader("Ranking powtarzalności Over/Under – cała historia (B+C)")
 
         threshold_rank = st.slider(
             "Próg (%) Over/Under",
@@ -3276,13 +3276,13 @@ elif page == "Powtarzalne Over/Under":
                     "Over": "Liczba Over",
                     "Under": "Liczba Under",
                     "Total": "Over+Under",
-                    "Periods": "Ilość spotkań",
-                    "Over_rate": "Over / Ilość spotkań",
-                    "Under_rate": "Under / Ilość spotkań",
+                    "Periods": "Okresy (mianownik)",
+                    "Over_rate": "Over / Periods",
+                    "Under_rate": "Under / Periods",
                     "Minutes_total": "Suma minut (historia)",
                 }).round({
-                    "Over / Ilość spotkań": 2,
-                    "Under / Ilość spotkań": 2,
+                    "Over / Periods": 2,
+                    "Under / Periods": 2,
                 }),
                 use_container_width=True,
             )
@@ -3297,13 +3297,13 @@ elif page == "Powtarzalne Over/Under":
                     "Under": "Liczba Under",
                     "Over": "Liczba Over",
                     "Total": "Over+Under",
-                    "Periods": "Ilość spotkań",
-                    "Over_rate": "Over / Ilość spotkań",
-                    "Under_rate": "Under / Ilość spotkań",
+                    "Periods": "Okresy (mianownik)",
+                    "Over_rate": "Over / Periods",
+                    "Under_rate": "Under / Periods",
                     "Minutes_total": "Suma minut (historia)",
                 }).round({
-                    "Over / Ilość spotkań": 2,
-                    "Under / Ilość spotkań": 2,
+                    "Over / Periods": 2,
+                    "Under / Periods": 2,
                 }),
                 use_container_width=True,
             )
@@ -3312,22 +3312,25 @@ elif page == "Powtarzalne Over/Under":
             """
 **Interpretacja rankingu:**
 
-- Każdy Over/Under oznacza okres, w którym zawodnik był istotnie powyżej lub poniżej baseline zespołu, po korekcie minutami .  
+- Każdy Over/Under oznacza okres, w którym zawodnik był istotnie powyżej lub poniżej baseline zespołu, po korekcie minutami (B+C).  
 - Ranking pokazuje, którzy zawodnicy **regularnie** przekraczają baseline (Over) lub częściej są poniżej (Under).  
 """
         )
 
 
 # ============================================================
-#          STRONA: BENCHMARK ZAWODNIKA – WIDOK
+#          STRONA: BENCHMARK ZAWODNIKA – PII (SCALED)
 # ============================================================
 
 elif page == "Benchmark zawodnika":
 
-    st.subheader("Benchmark zawodnika")
+    import math
+
+    st.subheader("Benchmark zawodnika (PII – skalowany)")
     st.caption(
-        "Porównanie zawodników względem wzorca – zawodnicy z tej samej pozycji lub z tego samego zespołu, "
-        "metryki motoryczne w czasie oraz statystyki zbiorcze względem wzorca."
+        "Benchmark oparty na Player Intensity Index (PII). Wynik jest standaryzowany (z-score) "
+        "względem wybranej grupy odniesienia – analogicznie do standaryzacji w klasteryzacji. "
+        "Metryki per minuta dostępne jako dodatek."
     )
 
     # ---------------------------------------------------------
@@ -3335,7 +3338,9 @@ elif page == "Benchmark zawodnika":
     # ---------------------------------------------------------
     df = load_motoryka_table().copy()
 
-    # usuwamy team C1 z analizy
+    # (opcjonalnie) jeżeli tak miałeś: wyłącz C1 z globalnego zbioru
+    # UWAGA: jeśli chcesz benchmark vs C1, to nie filtruj C1 tutaj.
+    # Zostawiam Twoją dotychczasową logikę, ale możesz ją wyłączyć.
     if "Team" in df.columns:
         df = df[df["Team"] != "C1"]
 
@@ -3346,27 +3351,41 @@ elif page == "Benchmark zawodnika":
     df["Minutes"] = pd.to_numeric(df.get("Minutes"), errors="coerce").replace(0, np.nan)
     df["DateStart"] = pd.to_datetime(df.get("DateStart"), errors="coerce")
     df["DateEnd"] = pd.to_datetime(df.get("DateEnd"), errors="coerce")
+    df["PlayerIntensityIndex"] = pd.to_numeric(df.get("PlayerIntensityIndex"), errors="coerce")
 
-    df = df.dropna(subset=["Name", "Minutes", "DateStart", "DateEnd"])
+    df = df.dropna(subset=["Name", "Minutes", "DateStart", "DateEnd", "PlayerIntensityIndex"])
     if df.empty:
-        st.info("Brak pełnych danych (daty / minuty) do porównania.")
+        st.info("Brak pełnych danych (PII / daty / minuty) do porównania.")
         st.stop()
 
-    # środek okresu jako datetime (nie .date()) – altair to lubi
     df["DateMid"] = df["DateStart"] + (df["DateEnd"] - df["DateStart"]) / 2
 
-    # przeliczenia per minuta
-    per_min_base = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
-    for m in per_min_base:
-        if m in df.columns:
-            df[m + "_per_min"] = (
-                pd.to_numeric(df[m], errors="coerce") / df["Minutes"]
-            ).replace([np.inf, -np.inf], np.nan)
+    # ---------------------------------------------------------
+    # FUNKCJE POMOCNICZE
+    # ---------------------------------------------------------
+    def parse_pos(val):
+        if pd.isna(val):
+            return set()
+        out = set()
+        for p in str(val).replace("\\", "/").split("/"):
+            p = p.strip().upper()
+            if p:
+                out.add(p)
+        return out
 
-    per_min_cols = [m + "_per_min" for m in per_min_base if m + "_per_min" in df.columns]
-    if not per_min_cols:
-        st.info("Brak metryk per minuta.")
-        st.stop()
+    def wmean(x, w):
+        x = pd.to_numeric(x, errors="coerce")
+        w = pd.to_numeric(w, errors="coerce")
+        m = np.isfinite(x) & np.isfinite(w) & (w > 0)
+        if m.sum() == 0:
+            return np.nan
+        return float((x[m] * w[m]).sum() / w[m].sum())
+
+    # Normal CDF bez scipy (żeby nie zależeć od pakietu)
+    def norm_cdf(z):
+        if not np.isfinite(z):
+            return np.nan
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
     # ---------------------------------------------------------
     # WYBÓR WZORCA
@@ -3379,22 +3398,22 @@ elif page == "Benchmark zawodnika":
         st.info("Brak danych dla wzorca.")
         st.stop()
 
-    # zespół i pozycje wzorca
-    base_team = base_df["Team"].dropna().mode().iloc[0] if "Team" in base_df.columns else "—"
+    base_team = (
+        base_df["Team"].dropna().mode().iloc[0]
+        if "Team" in base_df.columns and not base_df["Team"].dropna().empty
+        else "—"
+    )
 
     positions = set()
     if "Position" in base_df.columns:
         for val in base_df["Position"].dropna():
-            for p in str(val).replace("\\", "/").split("/"):
-                p = p.strip().upper()
-                if p:
-                    positions.add(p)
+            positions |= parse_pos(val)
 
     pos_label = ", ".join(sorted(positions)) if positions else "—"
-    st.caption(f"Wzorzec – **{ref_player}**, zespół: **{base_team}**, pozycje: **{pos_label}**")
+    st.caption(f"Wzorzec: **{ref_player}** | zespół: **{base_team}** | pozycja(e): **{pos_label}**")
 
     # ---------------------------------------------------------
-    # TRYB PORÓWNANIA
+    # TRYB PORÓWNANIA (GRUPA)
     # ---------------------------------------------------------
     group_mode = st.radio(
         "Grupa porównawcza",
@@ -3405,83 +3424,260 @@ elif page == "Benchmark zawodnika":
 
     df_np = df[["Name", "Team", "Position"]].drop_duplicates()
 
-    def parse_pos(val):
-        if pd.isna(val):
-            return set()
-        out = set()
-        for p in str(val).replace("\\", "/").split("/"):
-            p = p.strip().upper()
-            if p:
-                out.add(p)
-        return out
-
     candidates = set()
-
     if group_mode == "Zawodnicy na tej samej pozycji":
         for _, r in df_np.iterrows():
-            if parse_pos(r["Position"]).intersection(positions):
+            if parse_pos(r.get("Position")).intersection(positions):
                 candidates.add(r["Name"])
     else:
         for _, r in df_np.iterrows():
-            if r["Team"] == base_team:
+            if r.get("Team") == base_team:
                 candidates.add(r["Name"])
 
     candidates.discard(ref_player)
     candidates = sorted(candidates)
 
     if not candidates:
-        st.info("Brak zawodników spełniających kryteria (pozycja/zespół).")
+        st.info("Brak zawodników spełniających kryteria (pozycja / zespół).")
         st.stop()
 
-    cmp_players = st.multiselect(
+    pick = st.multiselect(
         "Zawodnicy do porównania",
-        candidates,
-        default=candidates[:5] if len(candidates) > 5 else candidates,
-        key="bm_cmp_players",
+        options=candidates,
+        default=candidates[: min(5, len(candidates))],
+        key="bm_pick_players",
     )
 
-    if not cmp_players:
-        st.info("Wybierz co najmniej jednego zawodnika do porównania.")
+    if not pick:
+        st.info("Wybierz przynajmniej jednego zawodnika do porównania.")
         st.stop()
 
     # ---------------------------------------------------------
-    # WYBÓR METRYKI
+    # PARAMETRY: MINUTY / FILTR WIARYGODNOŚCI
     # ---------------------------------------------------------
-    metric = st.selectbox(
-        "Metryka (per min)",
-        per_min_cols,
-        format_func=lambda x: x.replace("_per_min", "") + " (per min)",
-        key="bm_metric",
+    min_minutes_total = st.slider(
+        "Minimalna suma minut (filtr jakości danych)",
+        min_value=0,
+        max_value=1500,
+        value=120,
+        step=30,
+        key="bm_min_minutes_total",
+    )
+
+    # Warianty skali: czy z-score ma być liczony na (ref + wybrani) czy na całej grupie kandydatów
+    scale_scope = st.radio(
+        "Zakres skali (do standaryzacji)",
+        ["Tylko wybrani + wzorzec", "Cała grupa odniesienia (wszyscy kandydaci)"],
+        horizontal=True,
+        key="bm_scale_scope",
+    )
+
+    # df_cmp: do wykresów i tabel porównawczych (ref + pick)
+    df_cmp = df[df["Name"].isin([ref_player] + pick)].copy()
+
+    mins_hist = (
+        df_cmp.groupby("Name")["Minutes"]
+        .sum()
+        .reset_index()
+        .rename(columns={"Minutes": "Minutes_total"})
+    )
+    keep_names = mins_hist[mins_hist["Minutes_total"] >= float(min_minutes_total)]["Name"].tolist()
+    df_cmp = df_cmp[df_cmp["Name"].isin(keep_names)].copy()
+
+    if ref_player not in df_cmp["Name"].unique():
+        st.info("Wzorzec nie spełnia filtra minut (obniż próg lub wybierz inny wzorzec).")
+        st.stop()
+
+    if df_cmp["Name"].nunique() < 2:
+        st.info("Po filtrze minut został tylko wzorzec – obniż próg lub wybierz inną grupę.")
+        st.stop()
+
+    # df_scale: zbiór do liczenia skali (μ, σ)
+    if scale_scope == "Cała grupa odniesienia (wszyscy kandydaci)":
+        scale_names = sorted(set([ref_player] + candidates))
+        df_scale = df[df["Name"].isin(scale_names)].copy()
+    else:
+        df_scale = df_cmp.copy()
+
+    mins_hist_scale = (
+        df_scale.groupby("Name")["Minutes"]
+        .sum()
+        .reset_index()
+        .rename(columns={"Minutes": "Minutes_total"})
+    )
+    keep_scale = mins_hist_scale[mins_hist_scale["Minutes_total"] >= float(min_minutes_total)]["Name"].tolist()
+    df_scale = df_scale[df_scale["Name"].isin(keep_scale)].copy()
+
+    if df_scale["Name"].nunique() < 3:
+        st.warning(
+            "Uwaga: mało zawodników w zbiorze skali (μ/σ). Standaryzacja może być niestabilna."
+        )
+
+    # ---------------------------------------------------------
+    # 1) WYKRES: PII w czasie (główna oś benchmarku)
+    # ---------------------------------------------------------
+    st.markdown("### PII w czasie – wzorzec vs grupa")
+
+    plot_data = df_cmp[["Name", "Team", "DateMid", "PlayerIntensityIndex", "Minutes"]].copy()
+    plot_data = plot_data.rename(columns={"PlayerIntensityIndex": "PII"}).dropna(subset=["PII"])
+
+    line = (
+        alt.Chart(plot_data)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("DateMid:T", title="Data"),
+            y=alt.Y("PII:Q", title="Player Intensity Index (PII)"),
+            color=alt.Color("Name:N", title="Zawodnik"),
+            tooltip=[
+                alt.Tooltip("DateMid:T", title="Data"),
+                alt.Tooltip("Name:N", title="Zawodnik"),
+                alt.Tooltip("Team:N", title="Zespół"),
+                alt.Tooltip("Minutes:Q", title="Minuty", format=".0f"),
+                alt.Tooltip("PII:Q", title="PII", format=".3f"),
+            ],
+        )
+        .properties(height=420)
+    )
+    st.altair_chart(line, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # 2) TABELA: Benchmark PII (skalowany jak w klasteryzacji)
+    # ---------------------------------------------------------
+    st.markdown("### Benchmark PII – podsumowanie (skalowane)")
+
+    # Podsumowanie porównawcze (ref + pick)
+    summary = (
+        df_cmp.groupby("Name", as_index=False)
+        .apply(lambda g: pd.Series({
+            "Team": g["Team"].dropna().mode().iloc[0] if "Team" in g.columns and not g["Team"].dropna().empty else "—",
+            "Minutes_total": pd.to_numeric(g["Minutes"], errors="coerce").fillna(0).sum(),
+            "PII_wmean": wmean(g["PlayerIntensityIndex"], g["Minutes"]),
+            "PII_median": pd.to_numeric(g["PlayerIntensityIndex"], errors="coerce").median(),
+            "N_periods": g[["DateStart", "DateEnd"]].drop_duplicates().shape[0],
+        }))
+        .reset_index(drop=True)
+    )
+
+    # Skala (μ, σ) liczona na df_scale (wybrani+ref lub cała grupa odniesienia)
+    scale_summary = (
+        df_scale.groupby("Name", as_index=False)
+        .apply(lambda g: pd.Series({
+            "Minutes_total": pd.to_numeric(g["Minutes"], errors="coerce").fillna(0).sum(),
+            "PII_wmean": wmean(g["PlayerIntensityIndex"], g["Minutes"]),
+        }))
+        .reset_index(drop=True)
+    )
+
+    scale_vals = scale_summary["PII_wmean"].dropna()
+    mu_g = float(scale_vals.mean()) if not scale_vals.empty else np.nan
+    sd_g = float(scale_vals.std(ddof=1)) if len(scale_vals) > 1 else np.nan
+    if not np.isfinite(sd_g) or sd_g == 0:
+        sd_g = np.nan
+
+    # Standaryzacja (z-score) + skala 0–100
+    summary["PII_z_vs_group"] = (summary["PII_wmean"] - mu_g) / sd_g
+    summary["PII_score_0_100"] = summary["PII_z_vs_group"].apply(lambda z: 100.0 * norm_cdf(z))
+
+    # Różnice vs wzorzec (żeby zachować to, co miałeś wcześniej)
+    ref_row = summary[summary["Name"] == ref_player].iloc[0]
+    ref_w = float(ref_row["PII_wmean"]) if pd.notna(ref_row["PII_wmean"]) else np.nan
+    ref_med = float(ref_row["PII_median"]) if pd.notna(ref_row["PII_median"]) else np.nan
+
+    summary["Diff_wmean_vs_ref"] = summary["PII_wmean"] - ref_w
+    summary["Diff_median_vs_ref"] = summary["PII_median"] - ref_med
+
+    # Tabela do wyświetlenia
+    summary_disp = summary.rename(columns={
+        "Name": "Zawodnik",
+        "Team": "Zespół",
+        "Minutes_total": "Suma minut",
+        "PII_wmean": "PII (średnia ważona)",
+        "PII_median": "PII (mediana)",
+        "PII_z_vs_group": "PII (z-score vs grupa)",
+        "PII_score_0_100": "PII (skala 0–100)",
+        "N_periods": "Liczba okresów",
+        "Diff_wmean_vs_ref": "Różnica PII_wmean vs wzorzec",
+        "Diff_median_vs_ref": "Różnica mediany vs wzorzec",
+    }).sort_values(["PII (z-score vs grupa)"], ascending=False)
+
+    st.dataframe(
+        summary_disp.round({
+            "Suma minut": 0,
+            "PII (średnia ważona)": 3,
+            "PII (mediana)": 3,
+            "PII (z-score vs grupa)": 2,
+            "PII (skala 0–100)": 1,
+            "Różnica PII_wmean vs wzorzec": 3,
+            "Różnica mediany vs wzorzec": 3,
+        }),
+        use_container_width=True,
+    )
+
+    st.caption(
+        f"Skala standaryzacji (grupa): μ = {mu_g:.3f} | σ = {sd_g:.3f}  "
+        f"(zakres skali: {scale_scope})"
+        if np.isfinite(mu_g) and np.isfinite(sd_g) else
+        "Nie udało się policzyć stabilnej skali (μ/σ). Sprawdź liczbę zawodników i filtr minut."
+    )
+
+    st.markdown(
+        """
+**Interpretacja (skalowanie jak w klasteryzacji):**
+- **PII (z-score vs grupa)**: 0 = poziom grupy, +1 = 1 odchylenie standardowe powyżej, −1 = 1 odchylenie poniżej.  
+- **PII (skala 0–100)**: wynik przemapowany na skalę intuicyjną (50 ≈ poziom grupy).  
+- „Suma minut” i „Liczba okresów” określają wiarygodność porównania.
+"""
     )
 
     # ---------------------------------------------------------
-    # WYCIĘCIE DANYCH DO ANALIZY
+    # DODATEK: metryki per minuta (nie jako główny moduł)
     # ---------------------------------------------------------
-    df_cmp = df[df["Name"].isin([ref_player] + cmp_players)].copy()
-    df_cmp = df_cmp.dropna(subset=["DateMid", metric])
+    with st.expander("Dodatek: analiza metryk per minuta (TD/HSR/Sprint/ACC/DECEL)"):
 
-    if df_cmp.empty:
-        st.info("Brak danych do analizy tej metryki.")
-        st.stop()
+        df_pm = df.copy()
+        df_pm["Minutes"] = pd.to_numeric(df_pm.get("Minutes"), errors="coerce").replace(0, np.nan)
 
-    # ---------------------------------------------------------
-    # DWA TABY
-    # ---------------------------------------------------------
-    tab_time, tab_stats = st.tabs(["Wykresy i daty", "Statystyki zbiorcze"])
+        per_min_base = ["TD_m", "HSR_m", "Sprint_m", "ACC", "DECEL"]
+        for m in per_min_base:
+            if m in df_pm.columns:
+                df_pm[m + "_per_min"] = (
+                    pd.to_numeric(df_pm[m], errors="coerce") / df_pm["Minutes"]
+                ).replace([np.inf, -np.inf], np.nan)
 
+        per_min_cols = [m + "_per_min" for m in per_min_base if m + "_per_min" in df_pm.columns]
+        if not per_min_cols:
+            st.info("Brak metryk per minuta.")
+            st.stop()
 
-    # =========================================================
-    # TAB 1 — wykres + tabelki per data
-    # =========================================================
-    with tab_time:
-        st.markdown("### Wykres w czasie – metryka per minuta")
+        metric = st.selectbox(
+            "Metryka (per minuta) – dodatek",
+            per_min_cols,
+            index=0,
+            key="bm_permin_metric",
+        )
 
-        plot_df = df_cmp[["Name", "Team", "DateMid", metric]].copy()
-        plot_df = plot_df.rename(columns={metric: "Value"})
-        plot_df["DateMid"] = pd.to_datetime(plot_df["DateMid"], errors="coerce")
+        df_pm_cmp = df_pm[df_pm["Name"].isin([ref_player] + pick)].copy()
 
-        chart = (
-            alt.Chart(plot_df)
+        mins_hist2 = (
+            df_pm_cmp.groupby("Name")["Minutes"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Minutes": "Minutes_total"})
+        )
+        keep2 = mins_hist2[mins_hist2["Minutes_total"] >= float(min_minutes_total)]["Name"].tolist()
+        df_pm_cmp = df_pm_cmp[df_pm_cmp["Name"].isin(keep2)].copy()
+
+        if df_pm_cmp["Name"].nunique() < 2:
+            st.info("Po filtrze minut brakuje porównania (został tylko wzorzec).")
+            st.stop()
+
+        st.markdown("#### Metryka per minuta w czasie (dodatek)")
+
+        plot_pm = df_pm_cmp[["Name", "Team", "DateMid", metric, "Minutes"]].copy()
+        plot_pm = plot_pm.rename(columns={metric: "Value"}).dropna(subset=["Value"])
+
+        line_pm = (
+            alt.Chart(plot_pm)
             .mark_line(point=True)
             .encode(
                 x=alt.X("DateMid:T", title="Data"),
@@ -3489,183 +3685,57 @@ elif page == "Benchmark zawodnika":
                 color=alt.Color("Name:N", title="Zawodnik"),
                 tooltip=[
                     alt.Tooltip("DateMid:T", title="Data"),
-                    alt.Tooltip("Team:N", title="Zespół"),
                     alt.Tooltip("Name:N", title="Zawodnik"),
-                    alt.Tooltip("Value:Q", title=metric, format=".1f"),
+                    alt.Tooltip("Team:N", title="Zespół"),
+                    alt.Tooltip("Minutes:Q", title="Minuty", format=".0f"),
+                    alt.Tooltip("Value:Q", title=metric, format=".3f"),
                 ],
             )
-            .properties(height=420)
+            .properties(height=380)
+        )
+        st.altair_chart(line_pm, use_container_width=True)
+
+        st.markdown("#### Podsumowanie per minuta (dodatek)")
+
+        add_summary = (
+            df_pm_cmp.groupby("Name", as_index=False)
+            .apply(lambda g: pd.Series({
+                "Team": g["Team"].dropna().mode().iloc[0] if "Team" in g.columns and not g["Team"].dropna().empty else "—",
+                "Minutes_total": pd.to_numeric(g["Minutes"], errors="coerce").fillna(0).sum(),
+                "Mean": pd.to_numeric(g[metric], errors="coerce").mean(),
+                "Median": pd.to_numeric(g[metric], errors="coerce").median(),
+                "Std": pd.to_numeric(g[metric], errors="coerce").std(ddof=1),
+            }))
+            .reset_index(drop=True)
         )
 
-        st.altair_chart(chart, use_container_width=True)
+        ref_add = add_summary[add_summary["Name"] == ref_player].iloc[0]
+        add_summary["Diff_mean_vs_ref"] = add_summary["Mean"] - float(ref_add["Mean"])
+        add_summary["Diff_median_vs_ref"] = add_summary["Median"] - float(ref_add["Median"])
 
-        # --------- tabelki per data vs wzorzec ---------
-        st.markdown("### Tabelki po datach – różnice względem zawodnika wzorcowego")
+        add_disp = add_summary.rename(columns={
+            "Name": "Zawodnik",
+            "Team": "Zespół",
+            "Minutes_total": "Suma minut",
+            "Mean": "Średnia",
+            "Median": "Mediana",
+            "Std": "Odch. std",
+            "Diff_mean_vs_ref": "Różnica średniej vs wzorzec",
+            "Diff_median_vs_ref": "Różnica mediany vs wzorzec",
+        }).sort_values(["Średnia"], ascending=False)
 
-        base_vals = (
-            base_df[["DateMid", metric]]
-            .dropna(subset=["DateMid", metric])
-            .groupby("DateMid", as_index=False)[metric]
-            .mean()
-            .rename(columns={metric: "BaseValue"})
+        st.dataframe(
+            add_disp.round({
+                "Suma minut": 0,
+                "Średnia": 3,
+                "Mediana": 3,
+                "Odch. std": 3,
+                "Różnica średniej vs wzorzec": 3,
+                "Różnica mediany vs wzorzec": 3,
+            }),
+            use_container_width=True,
         )
 
-        cmp_vals = (
-            df_cmp[df_cmp["Name"].isin(cmp_players)][["Name", "Team", "DateMid", metric]]
-            .dropna(subset=["DateMid", metric])
-            .copy()
-        )
-
-        cmp_vals = cmp_vals.merge(base_vals, on="DateMid", how="left")
-        cmp_vals = cmp_vals.dropna(subset=["BaseValue"])
-
-        if cmp_vals.empty:
-            st.info("Brak wspólnych dat pomiarowych między wzorcem a wybranymi zawodnikami.")
-        else:
-            cmp_vals["diff_abs"] = cmp_vals[metric] - cmp_vals["BaseValue"]
-            cmp_vals["diff_pct"] = np.where(
-                cmp_vals["BaseValue"].astype(float) == 0,
-                np.nan,
-                (cmp_vals[metric] / cmp_vals["BaseValue"] - 1) * 100,
-            )
-
-            table_view = (
-                cmp_vals
-                .sort_values(["DateMid", "Team", "Name"])
-                .rename(columns={
-                    "DateMid": "Data",
-                    "Team": "Zespół",
-                    "Name": "Zawodnik",
-                    metric: "Wartość zawodnika",
-                    "BaseValue": f"Wartość wzorca ({ref_player})",
-                    "diff_abs": "Różnica bezwzględna",
-                    "diff_pct": "Różnica (%)",
-                })
-            )
-
-            for d in sorted(table_view["Data"].unique()):
-                st.markdown(f"#### Data: {d}")
-                df_day = table_view[table_view["Data"] == d].drop(columns=["Data"])
-
-                st.dataframe(
-                    df_day.round({
-                        "Wartość zawodnika": 1,
-                        f"Wartość wzorca ({ref_player})": 1,
-                        "Różnica bezwzględna": 1,
-                        "Różnica (%)": 1,
-                    }),
-                    use_container_width=True,
-                )
-
-            st.markdown(
-                """
-                **Jak czytać te tabelki:**  
-                - Każda tabelka odpowiada jednej dacie (środek okresu pomiarowego).  
-                - „Wartość wzorca” to ta sama metryka dla zawodnika referencyjnego.  
-                - „Różnica (%)” = (wartość zawodnika / wartość wzorca – 1) × 100%.  
-                """
-            )
-
-    # =========================================================
-    # TAB 2 — statystyki zbiorcze
-    # =========================================================
-    with tab_stats:
-        st.markdown("### Statystyki zbiorcze — średnie, mediany, odchylenia")
-
-        base_metric_vals = base_df[metric].dropna()
-        base_mean = base_metric_vals.mean()
-        base_median = base_metric_vals.median()
-        base_std = base_metric_vals.std()
-        base_n = base_metric_vals.count()
-
-        # agregaty dla zawodników porównywanych
-        agg_cmp = (
-            df_cmp[df_cmp["Name"].isin(cmp_players)][["Name", "Team", metric]]
-            .dropna(subset=[metric])
-            .groupby(["Name", "Team"], as_index=False)
-            .agg(
-                Liczba_pomiarów=("Name", "size"),
-                Średnia=(metric, "mean"),
-                Mediana=(metric, "median"),
-                Odchylenie_std=(metric, "std"),
-            )
-        )
-
-        if agg_cmp.empty:
-            st.info("Brak danych do policzenia statystyk zbiorczych.")
-        else:
-            # dodajemy wartości wzorca i różnice
-            agg_cmp["Średnia wzorca"] = base_mean
-            agg_cmp["Mediana wzorca"] = base_median
-
-            agg_cmp["Różnica średniej"] = agg_cmp["Średnia"] - base_mean
-            agg_cmp["Różnica mediany"] = agg_cmp["Mediana"] - base_median
-
-            agg_cmp["Różnica średniej (%)"] = np.where(
-                base_mean == 0, np.nan, (agg_cmp["Średnia"] / base_mean - 1) * 100
-            )
-            agg_cmp["Różnica mediany (%)"] = np.where(
-                base_median == 0, np.nan, (agg_cmp["Mediana"] / base_median - 1) * 100
-            )
-
-            # sortowanie po różnicy średniej
-            agg_cmp = agg_cmp.sort_values("Różnica średniej", ascending=False)
-
-            # wiersz z wzorcem na górze tabeli
-            ref_row = pd.DataFrame({
-                "Name": [ref_player],
-                "Team": [base_team],
-                "Liczba_pomiarów": [base_n],
-                "Średnia": [base_mean],
-                "Mediana": [base_median],
-                "Odchylenie_std": [base_std],
-                "Średnia wzorca": [base_mean],
-                "Mediana wzorca": [base_median],
-                "Różnica średniej": [0.0],
-                "Różnica mediany": [0.0],
-                "Różnica średniej (%)": [0.0],
-                "Różnica mediany (%)": [0.0],
-            })
-
-            agg_show = pd.concat([ref_row, agg_cmp], ignore_index=True)
-            agg_show = agg_show.rename(columns={"Name": "Zawodnik", "Team": "Zespół"})
-
-            # kolumna Typ: Wzorzec / Zawodnik
-            typ_col = ["Wzorzec"] + ["Zawodnik"] * (len(agg_show) - 1)
-            agg_show.insert(0, "Typ", typ_col)
-
-            # zaokrąglenia – WSZYSTKO DO 1 MIEJSCA PO PRZECINKU
-            numeric_round = {
-                "Średnia": 1,
-                "Mediana": 1,
-                "Odchylenie_std": 1,
-                "Średnia wzorca": 1,
-                "Mediana wzorca": 1,
-                "Różnica średniej": 1,
-                "Różnica mediany": 1,
-                "Różnica średniej (%)": 1,
-                "Różnica mediany (%)": 1,
-            }
-            agg_show = agg_show.round(numeric_round)
-
-            # wyróżnienie wiersza wzorca
-            def highlight_ref(row):
-                if row["Typ"] == "Wzorzec":
-                    return ["background-color: #303030; font-weight: bold"] * len(row)
-                return [""] * len(row)
-
-            styled = agg_show.style.apply(highlight_ref, axis=1)
-
-            st.dataframe(styled, use_container_width=True)
-
-            st.markdown(
-                """
-                **Interpretacja:**  
-                - Wiersz „Wzorzec” to zawodnik referencyjny.  
-                - Średnia / mediana – wartości metryki per minuta dla zawodnika.  
-                - Różnice pokazują odchylenie od wzorca w jednostkach metryki i procentowo.  
-                """
-            )
 
 
 
