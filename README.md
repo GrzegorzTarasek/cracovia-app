@@ -20,4 +20,5 @@ Wykorzystane technologie:
 - Matplotlib / Plotly
 
 Ochrona danych (RODO)
+
 Ze względu na przepisy dotyczące ochrony danych osobowych (RODO), nazwiska w aplikacji prezentowane są wyłącznie w formie inicjałów.
